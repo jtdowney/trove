@@ -1,7 +1,7 @@
 import gleam/bit_array
 import gleam/int
 import gleam/io
-import gleam/option.{None}
+import gleam/option
 import gleam/string
 import trove
 import trove/codec
@@ -51,20 +51,20 @@ pub fn main() {
 
   io.println("=== Users stored with custom codec ===")
 
-  trove.range(db, min: None, max: None, direction: range.Forward)
+  trove.range(db, min: option.None, max: option.None, direction: range.Forward)
   |> print_users()
 
   trove.close(db)
   let assert Ok(db2) = trove.open(config)
 
   io.println("\n=== Users after reopen ===")
-  trove.range(db2, min: None, max: None, direction: range.Forward)
+  trove.range(db2, min: option.None, max: option.None, direction: range.Forward)
   |> print_users()
 
   let assert Ok(Nil) = trove.compact(db2, timeout: 60_000)
 
   io.println("\n=== Users after compaction ===")
-  trove.range(db2, min: None, max: None, direction: range.Forward)
+  trove.range(db2, min: option.None, max: option.None, direction: range.Forward)
   |> print_users()
 
   trove.close(db2)

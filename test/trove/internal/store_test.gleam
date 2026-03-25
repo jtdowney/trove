@@ -5,7 +5,7 @@ import gleam/option
 import qcheck
 import simplifile
 import trove/internal/btree
-import trove/internal/store.{ChecksumMismatch, NoHeaderFound, NodeExceedsBounds}
+import trove/internal/store
 import trove/test_helpers
 
 pub fn blank_new_store_test() {
@@ -242,7 +242,7 @@ pub fn corrupt_only_file_returns_no_header_test() {
   let assert Ok(Nil) = simplifile.write_bits(path, <<0x2A, 0xDE, 0xAD>>)
 
   let assert Ok(s) = store.open(path: path)
-  let assert Error(NoHeaderFound) = store.get_latest_header(store: s)
+  let assert Error(store.NoHeaderFound) = store.get_latest_header(store: s)
 
   let assert Ok(Nil) = store.close(store: s)
   let assert Ok(_) = simplifile.delete_all([dir])
@@ -494,7 +494,8 @@ pub fn get_node_checksum_mismatch_returns_error_test() {
   let assert Ok(Nil) = simplifile.write_bits(path, corrupted)
 
   let assert Ok(s2) = store.open(path: path)
-  let assert Error(ChecksumMismatch) = store.get_node(store: s2, location: loc)
+  let assert Error(store.ChecksumMismatch) =
+    store.get_node(store: s2, location: loc)
   let assert Ok(Nil) = store.close(store: s2)
 
   let assert Ok(_) = simplifile.delete_all([dir])
@@ -510,7 +511,8 @@ pub fn get_node_truncated_node_returns_error_test() {
   let assert Ok(Nil) = simplifile.write_bits(path, payload)
 
   let assert Ok(s) = store.open(path: path)
-  let assert Error(NodeExceedsBounds) = store.get_node(store: s, location: 0)
+  let assert Error(store.NodeExceedsBounds) =
+    store.get_node(store: s, location: 0)
   let assert Ok(Nil) = store.close(store: s)
 
   let assert Ok(_) = simplifile.delete_all([dir])

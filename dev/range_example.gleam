@@ -1,6 +1,6 @@
 import gleam/int
 import gleam/io
-import gleam/option.{None, Some}
+import gleam/option
 import gleam/yielder
 import trove
 import trove/codec
@@ -27,18 +27,18 @@ pub fn main() {
   )
 
   io.println("=== All entries (forward) ===")
-  trove.range(db, min: None, max: None, direction: range.Forward)
+  trove.range(db, min: option.None, max: option.None, direction: range.Forward)
   |> print_entries()
 
   io.println("\n=== All entries (reverse) ===")
-  trove.range(db, min: None, max: None, direction: range.Reverse)
+  trove.range(db, min: option.None, max: option.None, direction: range.Reverse)
   |> print_entries()
 
   io.println("\n=== Keys 5..10 (inclusive) ===")
   trove.range(
     db,
-    min: Some(range.Inclusive(5)),
-    max: Some(range.Inclusive(10)),
+    min: option.Some(range.Inclusive(5)),
+    max: option.Some(range.Inclusive(10)),
     direction: range.Forward,
   )
   |> print_entries()
@@ -46,8 +46,8 @@ pub fn main() {
   io.println("\n=== Keys > 15 ===")
   trove.range(
     db,
-    min: Some(range.Exclusive(15)),
-    max: None,
+    min: option.Some(range.Exclusive(15)),
+    max: option.None,
     direction: range.Forward,
   )
   |> print_entries()
@@ -56,8 +56,8 @@ pub fn main() {
   trove.with_snapshot(db, fn(snap) {
     trove.snapshot_range(
       snapshot: snap,
-      min: None,
-      max: None,
+      min: option.None,
+      max: option.None,
       direction: range.Forward,
     )
     |> yielder.take(3)

@@ -1,6 +1,6 @@
 import gleam/int
 import gleam/io
-import gleam/option.{None}
+import gleam/option
 import gleam/yielder
 import trove
 import trove/codec
@@ -34,8 +34,8 @@ pub fn main() {
     io.println("\nSnapshot view (frozen at time of acquisition):")
     trove.snapshot_range(
       snapshot: snap,
-      min: None,
-      max: None,
+      min: option.None,
+      max: option.None,
       direction: range.Forward,
     )
     |> yielder.each(fn(entry) {
@@ -44,7 +44,7 @@ pub fn main() {
   })
 
   io.println("\nLive database view (reflects mutations):")
-  trove.range(db, min: None, max: None, direction: range.Forward)
+  trove.range(db, min: option.None, max: option.None, direction: range.Forward)
   |> print_entries()
 
   trove.close(db)

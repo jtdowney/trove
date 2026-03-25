@@ -5,7 +5,7 @@ import gleam/option
 import gleam/yielder
 import qcheck
 import trove/codec
-import trove/internal/btree.{ValidationError}
+import trove/internal/btree
 import trove/test_helpers
 
 pub fn new_creates_empty_tree_test() {
@@ -41,34 +41,34 @@ pub fn from_header_valid_nonempty_test() {
 }
 
 pub fn from_header_none_root_nonzero_size_returns_error_test() {
-  let assert Error(ValidationError(
+  let assert Error(btree.ValidationError(
     "inconsistent header: None root with non-zero size",
   )) = btree.from_header(root: option.None, size: 5, dirt: 0, capacity: 32)
   Nil
 }
 
 pub fn from_header_some_root_zero_size_returns_error_test() {
-  let assert Error(ValidationError(
+  let assert Error(btree.ValidationError(
     "inconsistent header: Some root with zero or negative size",
   )) = btree.from_header(root: option.Some(42), size: 0, dirt: 0, capacity: 32)
   Nil
 }
 
 pub fn from_header_some_root_negative_size_returns_error_test() {
-  let assert Error(ValidationError(
+  let assert Error(btree.ValidationError(
     "inconsistent header: Some root with zero or negative size",
   )) = btree.from_header(root: option.Some(42), size: -1, dirt: 0, capacity: 32)
   Nil
 }
 
 pub fn from_header_negative_dirt_returns_error_test() {
-  let assert Error(ValidationError("inconsistent header: negative dirt")) =
+  let assert Error(btree.ValidationError("inconsistent header: negative dirt")) =
     btree.from_header(root: option.None, size: 0, dirt: -1, capacity: 32)
   Nil
 }
 
 pub fn from_header_negative_dirt_with_root_returns_error_test() {
-  let assert Error(ValidationError("inconsistent header: negative dirt")) =
+  let assert Error(btree.ValidationError("inconsistent header: negative dirt")) =
     btree.from_header(root: option.Some(42), size: 5, dirt: -1, capacity: 32)
   Nil
 }
@@ -450,14 +450,14 @@ pub fn contains_matches_lookup_property_test() {
 }
 
 pub fn from_header_capacity_1_returns_error_test() {
-  let assert Error(ValidationError("capacity must be at least 2")) =
+  let assert Error(btree.ValidationError("capacity must be at least 2")) =
     btree.from_header(root: option.None, size: 0, dirt: 0, capacity: 1)
   Nil
 }
 
 pub fn load_capacity_1_returns_error_test() {
   use s <- test_helpers.with_store()
-  let assert Error(ValidationError("capacity must be at least 2")) =
+  let assert Error(btree.ValidationError("capacity must be at least 2")) =
     btree.load(
       entries: [#(1, "a")],
       store: s,
@@ -471,7 +471,7 @@ pub fn load_capacity_1_returns_error_test() {
 
 pub fn load_from_yielder_capacity_1_returns_error_test() {
   use s <- test_helpers.with_store()
-  let assert Error(ValidationError("capacity must be at least 2")) =
+  let assert Error(btree.ValidationError("capacity must be at least 2")) =
     btree.load_from_yielder(
       entries: yielder.from_list([#(1, "a")]),
       store: s,
@@ -485,7 +485,7 @@ pub fn load_from_yielder_capacity_1_returns_error_test() {
 
 pub fn load_duplicate_keys_returns_error_test() {
   use s <- test_helpers.with_store()
-  let assert Error(ValidationError("duplicate key in bulk load input")) =
+  let assert Error(btree.ValidationError("duplicate key in bulk load input")) =
     btree.load(
       entries: [#(1, "a"), #(1, "b")],
       store: s,
@@ -499,7 +499,7 @@ pub fn load_duplicate_keys_returns_error_test() {
 
 pub fn load_unsorted_keys_returns_error_test() {
   use s <- test_helpers.with_store()
-  let assert Error(ValidationError("unsorted key in bulk load input")) =
+  let assert Error(btree.ValidationError("unsorted key in bulk load input")) =
     btree.load(
       entries: [#(2, "a"), #(1, "b")],
       store: s,
@@ -513,7 +513,7 @@ pub fn load_unsorted_keys_returns_error_test() {
 
 pub fn load_from_yielder_duplicate_keys_returns_error_test() {
   use s <- test_helpers.with_store()
-  let assert Error(ValidationError("duplicate key in bulk load input")) =
+  let assert Error(btree.ValidationError("duplicate key in bulk load input")) =
     btree.load_from_yielder(
       entries: yielder.from_list([#(1, "a"), #(1, "b")]),
       store: s,
@@ -527,7 +527,7 @@ pub fn load_from_yielder_duplicate_keys_returns_error_test() {
 
 pub fn load_from_yielder_unsorted_keys_returns_error_test() {
   use s <- test_helpers.with_store()
-  let assert Error(ValidationError("unsorted key in bulk load input")) =
+  let assert Error(btree.ValidationError("unsorted key in bulk load input")) =
     btree.load_from_yielder(
       entries: yielder.from_list([#(2, "a"), #(1, "b")]),
       store: s,

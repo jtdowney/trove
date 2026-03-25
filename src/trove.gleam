@@ -28,7 +28,7 @@
 //// trove.close(db)
 //// ```
 
-import exception.{type Exception, Errored, Exited, Thrown}
+import exception.{type Exception}
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom
 import gleam/erlang/process
@@ -52,9 +52,9 @@ fn erlang_raise(
 
 fn reraise(ex: Exception) -> a {
   let #(class, reason) = case ex {
-    Errored(reason) -> #("error", reason)
-    Thrown(reason) -> #("throw", reason)
-    Exited(reason) -> #("exit", reason)
+    exception.Errored(reason) -> #("error", reason)
+    exception.Thrown(reason) -> #("throw", reason)
+    exception.Exited(reason) -> #("exit", reason)
   }
   erlang_raise(atom.create(class), reason, [])
 }

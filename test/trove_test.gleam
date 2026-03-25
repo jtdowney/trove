@@ -2,7 +2,7 @@ import exception
 import gleam/dict
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option
 import gleam/string
 import gleam/yielder
 import qcheck
@@ -277,7 +277,12 @@ pub fn range_forward_test() {
   with_db(fn(db) {
     trove.put_multi(db, entries: [#("a", "1"), #("b", "2"), #("c", "3")])
     let entries =
-      trove.range(db, min: None, max: None, direction: range.Forward)
+      trove.range(
+        db,
+        min: option.None,
+        max: option.None,
+        direction: range.Forward,
+      )
     assert entries == [#("a", "1"), #("b", "2"), #("c", "3")]
   })
 }
@@ -286,7 +291,12 @@ pub fn range_reverse_test() {
   with_db(fn(db) {
     trove.put_multi(db, entries: [#("a", "1"), #("b", "2"), #("c", "3")])
     let entries =
-      trove.range(db, min: None, max: None, direction: range.Reverse)
+      trove.range(
+        db,
+        min: option.None,
+        max: option.None,
+        direction: range.Reverse,
+      )
     assert entries == [#("c", "3"), #("b", "2"), #("a", "1")]
   })
 }
@@ -302,8 +312,8 @@ pub fn range_bounded_test() {
     let entries =
       trove.range(
         db,
-        min: Some(range.Inclusive("b")),
-        max: Some(range.Exclusive("d")),
+        min: option.Some(range.Inclusive("b")),
+        max: option.Some(range.Exclusive("d")),
         direction: range.Forward,
       )
     assert entries == [#("b", "2"), #("c", "3")]
@@ -891,8 +901,8 @@ pub fn snapshot_range_bounded_test() {
       trove.with_snapshot(db, fn(snap) {
         trove.snapshot_range(
           snapshot: snap,
-          min: Some(range.Inclusive("b")),
-          max: Some(range.Exclusive("d")),
+          min: option.Some(range.Inclusive("b")),
+          max: option.Some(range.Exclusive("d")),
           direction: range.Forward,
         )
         |> yielder.to_list()
@@ -917,7 +927,12 @@ pub fn read_only_transaction_commit_is_noop_test() {
 pub fn range_empty_database_test() {
   with_db(fn(db) {
     let entries =
-      trove.range(db, min: None, max: None, direction: range.Forward)
+      trove.range(
+        db,
+        min: option.None,
+        max: option.None,
+        direction: range.Forward,
+      )
     assert entries == []
   })
 }
