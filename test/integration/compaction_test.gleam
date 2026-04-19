@@ -111,7 +111,8 @@ pub fn recover_skips_file_with_corrupt_root_test() {
   // Create 1.trv with a valid header pointing to non-existent root offset.
   // get_latest_header will succeed, but get_node at that offset will fail.
   let assert Ok(s) = store.open(path: dir <> "/1.trv")
-  let header = store.Header(root: option.Some(9999), size: 1, dirt: 0)
+  let header =
+    store.Header(root: option.Some(9999), size: 1, dirt: 0, keyspaces: [])
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
 
@@ -131,7 +132,7 @@ pub fn recover_skips_file_with_inconsistent_header_test() {
 
   // Create 1.trv with header root: None, size: 5 (semantically invalid)
   let assert Ok(s) = store.open(path: dir <> "/1.trv")
-  let header = store.Header(root: option.None, size: 5, dirt: 0)
+  let header = store.Header(root: option.None, size: 5, dirt: 0, keyspaces: [])
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
 
@@ -163,7 +164,13 @@ pub fn recover_skips_file_with_some_root_zero_size_test() {
     )
   let assert Ok(root_offset) = store.put_node(store: s, data: leaf_bytes)
   // Header has valid root but size: 0 — semantically invalid
-  let header = store.Header(root: option.Some(root_offset), size: 0, dirt: 0)
+  let header =
+    store.Header(
+      root: option.Some(root_offset),
+      size: 0,
+      dirt: 0,
+      keyspaces: [],
+    )
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
 
@@ -318,7 +325,13 @@ pub fn recover_skips_file_with_valid_root_but_corrupt_children_test() {
 
   let assert Ok(s) = store.open(path: dir <> "/1.trv")
   let assert Ok(root_offset) = store.put_node(store: s, data: leaf_data)
-  let header = store.Header(root: option.Some(root_offset), size: 2, dirt: 0)
+  let header =
+    store.Header(
+      root: option.Some(root_offset),
+      size: 2,
+      dirt: 0,
+      keyspaces: [],
+    )
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
 
@@ -355,6 +368,116 @@ pub fn recovery_cleans_up_older_store_files_test() {
   let assert Ok("val5") = trove.get(db2, key: 5)
 
   trove.close(db2)
+  let assert Ok(_) = simplifile.delete_all([dir])
+  Nil
+}
+
+pub fn recover_skips_file_with_corrupt_keyspace_root_test() {
+  let dir = test_helpers.temp_dir()
+  let config = test_helpers.int_string_config(dir)
+  let assert Ok(db) = trove.open(config)
+  trove.put(db, key: 1, value: "safe")
+  trove.close(db)
+
+  // Plant 1.trv with a valid default root pointing nowhere dangerous but a
+  // named-keyspace root pointing at a non-existent offset. Recovery must
+  // skip this file and fall back to 0.trv.
+  let assert Ok(s) = store.open(path: dir <> "/1.trv")
+  let header =
+    store.Header(root: option.None, size: 0, dirt: 0, keyspaces: [
+      store.KeyspaceHeader(
+        name: "users",
+        root: option.Some(9999),
+        size: 1,
+        dirt: 0,
+      ),
+    ])
+  let assert Ok(_) = store.put_header(store: s, header: header)
+  let assert Ok(Nil) = store.close(store: s)
+
+  let assert Ok(db2) = trove.open(config)
+  let assert Ok("safe") = trove.get(db2, key: 1)
+  trove.close(db2)
+  let assert Ok(_) = simplifile.delete_all([dir])
+  Nil
+}
+
+pub fn auto_compact_fires_on_keyspace_dirt_test() {
+  let dir = test_helpers.temp_dir()
+  let config =
+    trove.Config(
+      ..test_helpers.int_string_config(dir),
+      auto_compact: trove.AutoCompact(min_dirt: 1, min_dirt_factor: 0.01),
+    )
+  let assert Ok(db) = trove.open(config)
+  let users =
+    trove.keyspace(
+      db,
+      name: "users",
+      key_codec: codec.string(),
+      value_codec: codec.string(),
+      key_compare: string.compare,
+    )
+
+  // Only the named keyspace gets writes/deletes. The aggregate dirt must
+  // cross the threshold and auto-compact must fire, leaving the live
+  // entry intact and dropping dirt to zero.
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin2")
+  trove.put_in(db, keyspace: users, key: "bob", value: "member")
+  trove.delete_in(db, keyspace: users, key: "bob")
+
+  assert trove.get_in(db, keyspace: users, key: "alice") == Ok("admin2")
+  assert trove.get_in(db, keyspace: users, key: "bob") == Error(Nil)
+  assert trove.dirt_factor(db) == 0.0
+
+  trove.close(db)
+  let assert Ok(_) = simplifile.delete_all([dir])
+  Nil
+}
+
+pub fn compact_preserves_multiple_keyspaces_test() {
+  let dir = test_helpers.temp_dir()
+  let config = test_helpers.int_string_config(dir)
+  let assert Ok(db) = trove.open(config)
+
+  let users =
+    trove.keyspace(
+      db,
+      name: "users",
+      key_codec: codec.string(),
+      value_codec: codec.string(),
+      key_compare: string.compare,
+    )
+  let counters =
+    trove.keyspace(
+      db,
+      name: "counters",
+      key_codec: codec.string(),
+      value_codec: codec.int(),
+      key_compare: string.compare,
+    )
+
+  trove.put(db, key: 1, value: "default_one")
+  trove.put(db, key: 2, value: "default_two")
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+  trove.put_in(db, keyspace: users, key: "bob", value: "member")
+  trove.put_in(db, keyspace: counters, key: "visits", value: 42)
+  trove.delete(db, key: 2)
+  trove.delete_in(db, keyspace: users, key: "bob")
+
+  let assert Ok(Nil) = trove.compact(db, timeout: 60_000)
+
+  assert trove.get(db, key: 1) == Ok("default_one")
+  assert trove.get(db, key: 2) == Error(Nil)
+  assert trove.get_in(db, keyspace: users, key: "alice") == Ok("admin")
+  assert trove.get_in(db, keyspace: users, key: "bob") == Error(Nil)
+  assert trove.get_in(db, keyspace: counters, key: "visits") == Ok(42)
+
+  // Compaction collapses dirt to zero
+  assert trove.dirt_factor(db) == 0.0
+
+  trove.close(db)
   let assert Ok(_) = simplifile.delete_all([dir])
   Nil
 }

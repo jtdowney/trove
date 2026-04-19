@@ -2,6 +2,7 @@
 
 import gleam/bit_array
 import gleam/bool
+import gleam/list
 import gleam/option
 import gleam/result
 import trove/internal/store/file_ffi
@@ -28,9 +29,17 @@ const block_size = 1024
 
 const data_marker = 0x00
 
-const header_marker = 0x2A
+const legacy_header_marker = 0x2A
+
+const header_marker = 0x2B
 
 const checksum_size = 16
+
+const legacy_header_size = 42
+
+const header_length_prefix_size = 4
+
+const max_keyspaces = 65_535
 
 fn map_io(result: Result(a, String)) -> Result(a, StoreError) {
   result.map_error(result, fn(s) { IoError(detail: s) })
@@ -41,9 +50,27 @@ pub opaque type Store {
   Store(handle: file_ffi.FileHandle, path: String)
 }
 
-/// A persisted header recording the root offset, entry count, and dirt count.
+/// Per-keyspace metadata carried in a v2 header.
+pub type KeyspaceHeader {
+  KeyspaceHeader(name: String, root: option.Option(Int), size: Int, dirt: Int)
+}
+
+/// A persisted header recording the default root, entry count, dirt count,
+/// and any named keyspaces.
 pub type Header {
-  Header(root: option.Option(Int), size: Int, dirt: Int)
+  Header(
+    root: option.Option(Int),
+    size: Int,
+    dirt: Int,
+    keyspaces: List(KeyspaceHeader),
+  )
+}
+
+/// The total on-disk size of this header's record, in bytes. Used by crash
+/// tests to compute post-write file offsets.
+pub fn encoded_size(header header: Header) -> Int {
+  let payload_size = payload_bytes(header) |> bit_array.byte_size
+  1 + header_length_prefix_size + payload_size + checksum_size
 }
 
 /// Open a store file for reading and writing. Creates the file if needed.
@@ -120,30 +147,74 @@ pub fn get_node(
   }
 }
 
-/// Write a header to the store, block-aligned. Returns the byte offset
+/// Write a header to the store, block-aligned. Always emits the v2 format
+/// (marker `0x2B`, length prefix, payload, checksum). Returns the byte offset
 /// where the header was written.
+///
+/// Records larger than one 1024-byte block span multiple consecutive blocks.
+/// Recovery scans block boundaries backwards looking for the marker; since
+/// the record is block-aligned and the payload length is prefixed, multi-block
+/// headers decode with the same scan as single-block ones.
 pub fn put_header(
   store store: Store,
   header header: Header,
 ) -> Result(Int, StoreError) {
+  let assert True = list.length(header.keyspaces) <= max_keyspaces
   use current_size <- result.try(
     file_ffi.file_size(handle: store.handle) |> map_io,
   )
   use _ <- result.try(pad_to_block_boundary(store.handle, current_size))
-  let #(has_root, root_val) = case header.root {
+  let payload = payload_bytes(header)
+  let payload_size = bit_array.byte_size(payload)
+  let checksum = file_ffi.hash(data: payload)
+  let record = <<
+    header_marker:8,
+    payload_size:int-big-size(32),
+    payload:bits,
+    checksum:bits,
+  >>
+  file_ffi.append(handle: store.handle, data: record)
+  |> map_io
+}
+
+fn payload_bytes(header: Header) -> BitArray {
+  let default = default_bytes(header.root, header.size, header.dirt)
+  let count = list.length(header.keyspaces)
+  let keyspaces =
+    list.fold(header.keyspaces, <<>>, fn(acc, ks) {
+      <<acc:bits, keyspace_bytes(ks):bits>>
+    })
+  <<default:bits, count:int-big-size(16), keyspaces:bits>>
+}
+
+fn default_bytes(root: option.Option(Int), size: Int, dirt: Int) -> BitArray {
+  let #(has_root, root_val) = case root {
     option.Some(r) -> #(1, r)
     option.None -> #(0, 0)
   }
-  let fields = <<
+  <<
     has_root:8,
     root_val:int-big-size(64),
-    header.size:int-big-size(64),
-    header.dirt:int-big-size(64),
+    size:int-big-size(64),
+    dirt:int-big-size(64),
   >>
-  let checksum = file_ffi.hash(data: fields)
-  let payload = <<header_marker:8, fields:bits, checksum:bits>>
-  file_ffi.append(handle: store.handle, data: payload)
-  |> map_io
+}
+
+fn keyspace_bytes(ks: KeyspaceHeader) -> BitArray {
+  let name_bytes = bit_array.from_string(ks.name)
+  let name_len = bit_array.byte_size(name_bytes)
+  let #(has_root, root_val) = case ks.root {
+    option.Some(r) -> #(1, r)
+    option.None -> #(0, 0)
+  }
+  <<
+    name_len:int-big-size(16),
+    name_bytes:bits,
+    has_root:8,
+    root_val:int-big-size(64),
+    ks.size:int-big-size(64),
+    ks.dirt:int-big-size(64),
+  >>
 }
 
 fn pad_to_block_boundary(
@@ -163,7 +234,9 @@ fn pad_to_block_boundary(
 }
 
 /// Read the most recent header from the store by scanning backwards from the
-/// last block.
+/// last block. Supports both the v2 (`0x2B`) format and the legacy v1
+/// (`0x2A`) format; legacy headers decode to a `Header` with an empty
+/// keyspace list.
 pub fn get_latest_header(store store: Store) -> Result(Header, StoreError) {
   use file_size <- result.try(
     file_ffi.file_size(handle: store.handle) |> map_io,
@@ -176,9 +249,6 @@ pub fn get_latest_header(store store: Store) -> Result(Header, StoreError) {
     }
   }
 }
-
-/// Size of a serialized header in bytes (1 marker + 25 fields + 16 checksum).
-pub const header_size = 42
 
 fn scan_for_header(store: Store, offset: Int) -> Result(Header, StoreError) {
   use <- bool.guard(when: offset < 0, return: Error(NoHeaderFound))
@@ -193,29 +263,164 @@ fn try_parse_header(store: Store, offset: Int) -> Result(Header, Nil) {
     file_ffi.pread(handle: store.handle, offset: offset, length: 1)
     |> result.replace_error(Nil),
   )
-  use <- bool.guard(when: marker_bytes != <<header_marker>>, return: Error(Nil))
+  case marker_bytes {
+    <<marker>> if marker == header_marker -> parse_v2_header(store, offset)
+    <<marker>> if marker == legacy_header_marker ->
+      parse_legacy_header(store, offset)
+    _ -> Error(Nil)
+  }
+}
+
+fn parse_v2_header(store: Store, offset: Int) -> Result(Header, Nil) {
+  use len_bytes <- result.try(
+    file_ffi.pread(
+      handle: store.handle,
+      offset: offset + 1,
+      length: header_length_prefix_size,
+    )
+    |> result.replace_error(Nil),
+  )
+  use payload_size <- result.try(decode_payload_length(len_bytes))
+  use file_size <- result.try(
+    file_ffi.file_size(handle: store.handle) |> result.replace_error(Nil),
+  )
+  let record_end =
+    offset + 1 + header_length_prefix_size + payload_size + checksum_size
+  use <- bool.guard(
+    when: payload_size < 0 || record_end > file_size,
+    return: Error(Nil),
+  )
+  use payload <- result.try(
+    file_ffi.pread(
+      handle: store.handle,
+      offset: offset + 1 + header_length_prefix_size,
+      length: payload_size,
+    )
+    |> result.replace_error(Nil),
+  )
+  use stored_checksum <- result.try(
+    file_ffi.pread(
+      handle: store.handle,
+      offset: offset + 1 + header_length_prefix_size + payload_size,
+      length: checksum_size,
+    )
+    |> result.replace_error(Nil),
+  )
+  let computed = file_ffi.hash(data: payload)
+  use <- bool.guard(when: computed != stored_checksum, return: Error(Nil))
+  decode_payload(payload)
+}
+
+fn decode_payload(payload: BitArray) -> Result(Header, Nil) {
+  case payload {
+    <<
+      default_fields:bytes-size(25),
+      count:int-big-size(16),
+      keyspaces_bits:bits,
+    >> -> {
+      use #(root, size, dirt) <- result.try(decode_default_fields(
+        default_fields,
+      ))
+      use keyspaces <- result.try(decode_keyspaces(keyspaces_bits, count, []))
+      Ok(Header(root: root, size: size, dirt: dirt, keyspaces: keyspaces))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn decode_payload_length(bytes: BitArray) -> Result(Int, Nil) {
+  case bytes {
+    <<n:int-big-size(32)>> -> Ok(n)
+    _ -> Error(Nil)
+  }
+}
+
+fn decode_default_fields(
+  fields: BitArray,
+) -> Result(#(option.Option(Int), Int, Int), Nil) {
+  case fields {
+    <<
+      has_root:8,
+      root_val:int-big-size(64),
+      size:int-big-size(64),
+      dirt:int-big-size(64),
+    >> -> {
+      use root <- result.try(decode_root_flag(has_root, root_val))
+      Ok(#(root, size, dirt))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn decode_root_flag(
+  has_root: Int,
+  root_val: Int,
+) -> Result(option.Option(Int), Nil) {
+  case has_root {
+    1 -> Ok(option.Some(root_val))
+    0 -> Ok(option.None)
+    _ -> Error(Nil)
+  }
+}
+
+fn decode_keyspaces(
+  bits: BitArray,
+  remaining: Int,
+  acc: List(KeyspaceHeader),
+) -> Result(List(KeyspaceHeader), Nil) {
+  case remaining {
+    0 -> {
+      use <- bool.guard(
+        when: bit_array.byte_size(bits) != 0,
+        return: Error(Nil),
+      )
+      Ok(list.reverse(acc))
+    }
+    _ -> {
+      use #(entry, tail) <- result.try(decode_one_keyspace(bits))
+      decode_keyspaces(tail, remaining - 1, [entry, ..acc])
+    }
+  }
+}
+
+fn decode_one_keyspace(
+  bits: BitArray,
+) -> Result(#(KeyspaceHeader, BitArray), Nil) {
+  case bits {
+    <<
+      name_len:int-big-size(16),
+      name_bytes:bytes-size(name_len),
+      has_root:8,
+      root_val:int-big-size(64),
+      size:int-big-size(64),
+      dirt:int-big-size(64),
+      tail:bits,
+    >> -> {
+      use name <- result.try(
+        bit_array.to_string(name_bytes) |> result.replace_error(Nil),
+      )
+      use root <- result.try(decode_root_flag(has_root, root_val))
+      Ok(#(KeyspaceHeader(name: name, root: root, size: size, dirt: dirt), tail))
+    }
+    _ -> Error(Nil)
+  }
+}
+
+fn parse_legacy_header(store: Store, offset: Int) -> Result(Header, Nil) {
   use raw <- result.try(
-    file_ffi.pread(handle: store.handle, offset: offset, length: header_size)
+    file_ffi.pread(
+      handle: store.handle,
+      offset: offset,
+      length: legacy_header_size,
+    )
     |> result.replace_error(Nil),
   )
   case raw {
     <<_:8, fields:bytes-size(25), stored_checksum:bytes-size(16)>> -> {
       let computed = file_ffi.hash(data: fields)
       use <- bool.guard(when: computed != stored_checksum, return: Error(Nil))
-      case fields {
-        <<
-          has_root:8,
-          root_val:int-big-size(64),
-          size:int-big-size(64),
-          dirt:int-big-size(64),
-        >> ->
-          case has_root {
-            1 -> Ok(Header(root: option.Some(root_val), size: size, dirt: dirt))
-            0 -> Ok(Header(root: option.None, size: size, dirt: dirt))
-            _ -> Error(Nil)
-          }
-        _ -> Error(Nil)
-      }
+      use #(root, size, dirt) <- result.try(decode_default_fields(fields))
+      Ok(Header(root: root, size: size, dirt: dirt, keyspaces: []))
     }
     _ -> Error(Nil)
   }

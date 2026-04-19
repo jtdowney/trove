@@ -33,6 +33,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/erlang/reference
+import gleam/list
 import gleam/option
 import gleam/order
 import gleam/result
@@ -42,6 +43,8 @@ import trove/internal/db
 import trove/internal/snapshot
 import trove/internal/tx
 import trove/range
+
+const reserved_default_keyspace_name = "__trove_default__"
 
 @external(erlang, "erlang", "raise")
 fn erlang_raise(
@@ -126,6 +129,254 @@ pub type Config(k, v) {
 /// An open database handle. Parameterized by key type `k` and value type `v`.
 pub opaque type Db(k, v) {
   Db(subject: process.Subject(db.Message(k, v)), call_timeout: Int)
+}
+
+/// A handle to a named keyspace. Obtained via `trove.keyspace(...)`, which
+/// registers the keyspace's codecs and comparator with the database so later
+/// operations (`put_in`, `get_in`, compaction) can operate on it.
+pub opaque type Keyspace(k, v) {
+  Keyspace(
+    name: String,
+    key_codec: codec.Codec(k),
+    value_codec: codec.Codec(v),
+    key_compare: fn(k, k) -> order.Order,
+  )
+}
+
+/// Obtain a typed handle to a named keyspace. First use of a name registers it
+/// in this session; later uses update the codecs.
+///
+/// **Panics** if `name` collides with the reserved default-keyspace sentinel.
+///
+/// **Codec trust model.** Passing codecs that don't match those previously
+/// used for the same keyspace is undefined behavior: reads will likely
+/// produce garbage values or panics. Keep the
+/// `(key_codec, value_codec, key_compare)` tuple stable across opens for a
+/// given keyspace name. Matches the trust model of `Config.key_codec` and
+/// `Config.value_codec`.
+///
+/// ```gleam
+/// let users =
+///   trove.keyspace(
+///     db,
+///     name: "users",
+///     key_codec: codec.string(),
+///     value_codec: codec.string(),
+///     key_compare: string.compare,
+///   )
+/// ```
+pub fn keyspace(
+  db db: Db(_, _),
+  name name: String,
+  key_codec key_codec: codec.Codec(k),
+  value_codec value_codec: codec.Codec(v),
+  key_compare key_compare: fn(k, k) -> order.Order,
+) -> Keyspace(k, v) {
+  let assert True = name != reserved_default_keyspace_name
+  db.register_keyspace(
+    subject: db.subject,
+    name: name,
+    byte_compare: adapt_compare(key_codec, key_compare),
+    timeout: db.call_timeout,
+  )
+  Keyspace(
+    name: name,
+    key_codec: key_codec,
+    value_codec: value_codec,
+    key_compare: key_compare,
+  )
+}
+
+fn adapt_compare(
+  key_codec: codec.Codec(k),
+  key_compare: fn(k, k) -> order.Order,
+) -> fn(BitArray, BitArray) -> order.Order {
+  fn(a: BitArray, b: BitArray) {
+    let assert Ok(decoded_a) = key_codec.decode(a)
+    let assert Ok(decoded_b) = key_codec.decode(b)
+    key_compare(decoded_a, decoded_b)
+  }
+}
+
+/// List the names of every keyspace currently registered on this database.
+///
+/// Returns names in sorted order. Includes every keyspace that has been
+/// opened with `trove.keyspace(...)` in this session, plus every keyspace
+/// that was persisted in the store file (even if not yet registered in this
+/// session). Reading or writing a persisted-but-unregistered keyspace
+/// without first calling `trove.keyspace(...)` panics.
+///
+/// ```gleam
+/// let names = trove.list_keyspaces(db)
+/// ```
+pub fn list_keyspaces(db db: Db(_, _)) -> List(String) {
+  db.list_keyspaces(subject: db.subject, timeout: db.call_timeout)
+}
+
+/// Insert or update a key-value pair in a named keyspace.
+///
+/// **Panics** on store I/O errors (e.g. disk full, file corruption).
+///
+/// ```gleam
+/// trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+/// ```
+pub fn put_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+  value value: v,
+) -> Nil {
+  db.put_in(
+    subject: db.subject,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+    value_bytes: keyspace.value_codec.encode(value),
+    timeout: db.call_timeout,
+  )
+}
+
+/// Look up a key in a named keyspace. Returns `Ok(value)` if found,
+/// `Error(Nil)` if the key does not exist.
+///
+/// **Panics** on store I/O or decode errors (e.g. file corruption, codec
+/// mismatch against on-disk bytes).
+///
+/// ```gleam
+/// let assert Ok("admin") = trove.get_in(db, keyspace: users, key: "alice")
+/// ```
+pub fn get_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+) -> Result(v, Nil) {
+  case
+    db.get_in(
+      subject: db.subject,
+      name: keyspace.name,
+      key_bytes: keyspace.key_codec.encode(key),
+      timeout: db.call_timeout,
+    )
+  {
+    option.Some(value_bytes) -> keyspace.value_codec.decode(value_bytes)
+    option.None -> Error(Nil)
+  }
+}
+
+/// Remove a key from a named keyspace. No error if the key does not exist.
+///
+/// **Panics** on store I/O errors.
+///
+/// ```gleam
+/// trove.delete_in(db, keyspace: users, key: "alice")
+/// ```
+pub fn delete_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+) -> Nil {
+  db.delete_in(
+    subject: db.subject,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+    timeout: db.call_timeout,
+  )
+}
+
+/// Check whether a key exists in a named keyspace.
+///
+/// **Panics** on store I/O errors.
+///
+/// ```gleam
+/// let assert True = trove.has_key_in(db, keyspace: users, key: "alice")
+/// ```
+pub fn has_key_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+) -> Bool {
+  db.has_key_in(
+    subject: db.subject,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+    timeout: db.call_timeout,
+  )
+}
+
+/// Returns the number of live entries in a named keyspace.
+///
+/// ```gleam
+/// let n = trove.size_in(db, keyspace: users)
+/// ```
+pub fn size_in(db db: Db(_, _), keyspace keyspace: Keyspace(_, _)) -> Int {
+  db.size_in(subject: db.subject, name: keyspace.name, timeout: db.call_timeout)
+}
+
+/// Atomically insert multiple key-value pairs into a named keyspace. A
+/// single header write covers the entire batch.
+///
+/// **Panics** on store I/O errors.
+///
+/// ```gleam
+/// trove.put_multi_in(
+///   db,
+///   keyspace: users,
+///   entries: [#("alice", "admin"), #("bob", "member")],
+/// )
+/// ```
+pub fn put_multi_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  entries entries: List(#(k, v)),
+) -> Nil {
+  put_and_delete_multi_in(db:, keyspace:, puts: entries, deletes: [])
+}
+
+/// Atomically delete multiple keys from a named keyspace.
+///
+/// **Panics** on store I/O errors.
+///
+/// ```gleam
+/// trove.delete_multi_in(db, keyspace: users, keys: ["alice", "bob"])
+/// ```
+pub fn delete_multi_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  keys keys: List(k),
+) -> Nil {
+  put_and_delete_multi_in(db:, keyspace:, puts: [], deletes: keys)
+}
+
+/// Atomically insert and delete entries in a named keyspace under a single
+/// header write. Puts are applied first, then deletes.
+///
+/// **Panics** on store I/O errors.
+///
+/// ```gleam
+/// trove.put_and_delete_multi_in(
+///   db,
+///   keyspace: users,
+///   puts: [#("bob", "admin")],
+///   deletes: ["alice"],
+/// )
+/// ```
+pub fn put_and_delete_multi_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  puts puts: List(#(k, v)),
+  deletes deletes: List(k),
+) -> Nil {
+  let encoded_puts =
+    list.map(puts, fn(pair) {
+      #(keyspace.key_codec.encode(pair.0), keyspace.value_codec.encode(pair.1))
+    })
+  let encoded_deletes = list.map(deletes, keyspace.key_codec.encode)
+  db.put_and_delete_multi_in(
+    subject: db.subject,
+    name: keyspace.name,
+    puts: encoded_puts,
+    deletes: encoded_deletes,
+    timeout: db.call_timeout,
+  )
 }
 
 /// Open a database at the configured path. Creates the directory if it does
@@ -428,7 +679,10 @@ pub fn transaction(
         {
           Ok(Nil) -> {
             process.send(result_subject, Ok(value))
-            db.CommitOutcome(tx.get_tree(tx: tx_inner))
+            db.CommitOutcome(
+              tx.get_tree(tx: tx_inner),
+              tx.get_other_trees(tx: tx_inner),
+            )
           }
           Error(ex) -> {
             process.send(result_subject, Error(ex))
@@ -530,6 +784,63 @@ pub fn tx_delete(tx tx: Tx(k, v), key key: k) -> Tx(k, v) {
 /// ```
 pub fn tx_has_key(tx tx: Tx(k, v), key key: k) -> Bool {
   tx_get(tx: tx, key: key) |> result.is_ok
+}
+
+/// Look up a key in a named keyspace within a transaction. Sees writes made
+/// earlier in the same transaction.
+pub fn tx_get_in(
+  tx tx: Tx(k_default, v_default),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+) -> Result(v, Nil) {
+  case
+    tx.get_in(
+      tx: tx,
+      name: keyspace.name,
+      key_bytes: keyspace.key_codec.encode(key),
+    )
+  {
+    option.Some(value_bytes) -> keyspace.value_codec.decode(value_bytes)
+    option.None -> Error(Nil)
+  }
+}
+
+/// Insert or update a key-value pair in a named keyspace within a
+/// transaction. Returns the updated `Tx`.
+pub fn tx_put_in(
+  tx tx: Tx(k_default, v_default),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+  value value: v,
+) -> Tx(k_default, v_default) {
+  tx.put_in(
+    tx: tx,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+    value_bytes: keyspace.value_codec.encode(value),
+  )
+}
+
+/// Delete a key from a named keyspace within a transaction.
+pub fn tx_delete_in(
+  tx tx: Tx(k_default, v_default),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+) -> Tx(k_default, v_default) {
+  tx.delete_in(
+    tx: tx,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+  )
+}
+
+/// Check whether a key exists in a named keyspace within a transaction.
+pub fn tx_has_key_in(
+  tx tx: Tx(k_default, v_default),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+) -> Bool {
+  tx_get_in(tx: tx, keyspace: keyspace, key: key) |> result.is_ok
 }
 
 /// Run a callback with a point-in-time snapshot. The snapshot sees the state
@@ -653,6 +964,114 @@ pub fn range(
   use <- exception.defer(fn() { snapshot.close(snap) })
   snapshot.range(snapshot: snap, min: min, max: max, direction: direction)
   |> yielder.to_list()
+}
+
+/// Look up a key in a named keyspace within a snapshot.
+///
+/// ```gleam
+/// trove.with_snapshot(db, fn(snap) {
+///   trove.snapshot_get_in(snap, keyspace: users, key: "alice")
+/// })
+/// ```
+pub fn snapshot_get_in(
+  snapshot snapshot: Snapshot(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  key key: k,
+) -> Result(v, Nil) {
+  case
+    snapshot.get_in(
+      snapshot: snapshot,
+      name: keyspace.name,
+      key_bytes: keyspace.key_codec.encode(key),
+    )
+  {
+    option.Some(value_bytes) -> keyspace.value_codec.decode(value_bytes)
+    option.None -> Error(Nil)
+  }
+}
+
+/// Iterate over entries in a named keyspace within a snapshot. Returns a
+/// lazy `Yielder` streaming entries from disk.
+///
+/// The yielder holds a reference to the snapshot's file handle; consume it
+/// before the snapshot closes.
+///
+/// ```gleam
+/// trove.with_snapshot(db, fn(snap) {
+///   trove.snapshot_range_in(
+///     snap,
+///     keyspace: users,
+///     min: Some(range.Inclusive("a")),
+///     max: None,
+///     direction: range.Forward,
+///   )
+///   |> yielder.to_list
+/// })
+/// ```
+pub fn snapshot_range_in(
+  snapshot snapshot: Snapshot(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  min min: option.Option(range.Bound(k)),
+  max max: option.Option(range.Bound(k)),
+  direction direction: range.Direction,
+) -> yielder.Yielder(#(k, v)) {
+  snapshot.range_in(
+    snapshot: snapshot,
+    name: keyspace.name,
+    min: encode_bound(min, keyspace.key_codec),
+    max: encode_bound(max, keyspace.key_codec),
+    direction: direction,
+  )
+  |> yielder.map(fn(pair) {
+    let assert Ok(k) = keyspace.key_codec.decode(pair.0)
+    let assert Ok(v) = keyspace.value_codec.decode(pair.1)
+    #(k, v)
+  })
+}
+
+fn encode_bound(
+  bound: option.Option(range.Bound(k)),
+  key_codec: codec.Codec(k),
+) -> option.Option(range.Bound(BitArray)) {
+  option.map(bound, fn(b) {
+    case b {
+      range.Inclusive(v) -> range.Inclusive(key_codec.encode(v))
+      range.Exclusive(v) -> range.Exclusive(key_codec.encode(v))
+    }
+  })
+}
+
+/// Iterate over entries in a named keyspace within optional key bounds.
+/// Returns a `List` of key-value pairs. For large result sets, use
+/// `with_snapshot` and `snapshot_range_in` instead.
+///
+/// ```gleam
+/// let results = trove.range_in(
+///   db,
+///   keyspace: users,
+///   min: Some(range.Inclusive("a")),
+///   max: Some(range.Exclusive("z")),
+///   direction: range.Forward,
+/// )
+/// ```
+pub fn range_in(
+  db db: Db(_, _),
+  keyspace keyspace: Keyspace(k, v),
+  min min: option.Option(range.Bound(k)),
+  max max: option.Option(range.Bound(k)),
+  direction direction: range.Direction,
+) -> List(#(k, v)) {
+  let assert Ok(snap) =
+    db.acquire_snapshot(subject: db.subject, timeout: db.call_timeout)
+  use <- exception.defer(fn() { snapshot.close(snap) })
+  snapshot_range_in(
+    snapshot: snap,
+    keyspace: keyspace,
+    min: min,
+    max: max,
+    direction: direction,
+  )
+  |> yielder.to_list
 }
 
 fn map_open_error(error: db.InternalOpenError) -> OpenError {

@@ -1004,3 +1004,186 @@ pub fn compaction_roundtrip_property_test() {
     )
   assert entries == expected
 }
+
+fn users_keyspace(db: trove.Db(a, b)) -> trove.Keyspace(String, String) {
+  trove.keyspace(
+    db,
+    name: "users",
+    key_codec: codec.string(),
+    value_codec: codec.string(),
+    key_compare: string.compare,
+  )
+}
+
+pub fn list_keyspaces_is_sorted_test() {
+  use db <- test_helpers.with_open_db()
+  let _ =
+    trove.keyspace(
+      db,
+      name: "zulu",
+      key_codec: codec.string(),
+      value_codec: codec.string(),
+      key_compare: string.compare,
+    )
+  let _ =
+    trove.keyspace(
+      db,
+      name: "alpha",
+      key_codec: codec.string(),
+      value_codec: codec.string(),
+      key_compare: string.compare,
+    )
+  assert trove.list_keyspaces(db) == ["alpha", "zulu"]
+}
+
+pub fn reserved_default_name_panics_test() {
+  use db <- test_helpers.with_open_db()
+  let result =
+    exception.rescue(fn() {
+      trove.keyspace(
+        db,
+        name: "__trove_default__",
+        key_codec: codec.string(),
+        value_codec: codec.string(),
+        key_compare: string.compare,
+      )
+    })
+  let assert Error(_) = result
+  Nil
+}
+
+pub fn put_in_get_in_roundtrip_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+  assert trove.get_in(db, keyspace: users, key: "alice") == Ok("admin")
+  assert trove.get_in(db, keyspace: users, key: "bob") == Error(Nil)
+}
+
+pub fn put_in_survives_close_reopen_test() {
+  let dir = test_helpers.temp_dir()
+  let config = test_helpers.int_string_config(dir)
+
+  let assert Ok(db) = trove.open(config)
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+  trove.close(db)
+
+  let assert Ok(db2) = trove.open(config)
+  let users2 = users_keyspace(db2)
+  assert trove.get_in(db2, keyspace: users2, key: "alice") == Ok("admin")
+  trove.close(db2)
+  let assert Ok(_) = simplifile.delete_all([dir])
+}
+
+pub fn delete_in_removes_key_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+  trove.put_in(db, keyspace: users, key: "bob", value: "member")
+
+  trove.delete_in(db, keyspace: users, key: "alice")
+
+  assert trove.get_in(db, keyspace: users, key: "alice") == Error(Nil)
+  assert trove.get_in(db, keyspace: users, key: "bob") == Ok("member")
+}
+
+pub fn has_key_in_reflects_state_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+
+  assert trove.has_key_in(db, keyspace: users, key: "alice") == True
+  assert trove.has_key_in(db, keyspace: users, key: "bob") == False
+}
+
+pub fn size_in_counts_live_entries_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+  trove.put_in(db, keyspace: users, key: "bob", value: "member")
+  trove.put_in(db, keyspace: users, key: "carol", value: "member")
+  trove.delete_in(db, keyspace: users, key: "bob")
+
+  assert trove.size_in(db, keyspace: users) == 2
+}
+
+pub fn range_in_respects_bounds_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "a")
+  trove.put_in(db, keyspace: users, key: "bob", value: "b")
+  trove.put_in(db, keyspace: users, key: "carol", value: "c")
+  trove.put_in(db, keyspace: users, key: "dave", value: "d")
+
+  let results =
+    trove.range_in(
+      db,
+      keyspace: users,
+      min: option.Some(range.Inclusive("bob")),
+      max: option.Some(range.Exclusive("dave")),
+      direction: range.Forward,
+    )
+  assert results == [#("bob", "b"), #("carol", "c")]
+}
+
+pub fn snapshot_isolates_keyspace_writes_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "v1")
+
+  trove.with_snapshot(db, fn(snap) {
+    trove.put_in(db, keyspace: users, key: "alice", value: "v2")
+    assert trove.snapshot_get_in(snap, keyspace: users, key: "alice")
+      == Ok("v1")
+  })
+
+  assert trove.get_in(db, keyspace: users, key: "alice") == Ok("v2")
+}
+
+pub fn tx_writes_to_multiple_keyspaces_commit_atomically_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+
+  trove.transaction(db, timeout: 5000, callback: fn(tx) {
+    let tx = trove.tx_put(tx, key: 42, value: "default")
+    let tx = trove.tx_put_in(tx, keyspace: users, key: "alice", value: "admin")
+    trove.Commit(tx:, result: Nil)
+  })
+
+  assert trove.get(db, key: 42) == Ok("default")
+  assert trove.get_in(db, keyspace: users, key: "alice") == Ok("admin")
+}
+
+pub fn tx_cancel_leaves_keyspace_untouched_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "original")
+
+  trove.transaction(db, timeout: 5000, callback: fn(tx) {
+    let _tx =
+      trove.tx_put_in(tx, keyspace: users, key: "alice", value: "replaced")
+    trove.Cancel(result: Nil)
+  })
+
+  assert trove.get_in(db, keyspace: users, key: "alice") == Ok("original")
+}
+
+pub fn put_and_delete_multi_in_is_atomic_test() {
+  use db <- test_helpers.with_open_db()
+  let users = users_keyspace(db)
+  trove.put_in(db, keyspace: users, key: "alice", value: "admin")
+  trove.put_in(db, keyspace: users, key: "carol", value: "member")
+
+  trove.put_and_delete_multi_in(
+    db,
+    keyspace: users,
+    puts: [#("bob", "admin"), #("dave", "member")],
+    deletes: ["alice"],
+  )
+
+  assert trove.get_in(db, keyspace: users, key: "alice") == Error(Nil)
+  assert trove.get_in(db, keyspace: users, key: "bob") == Ok("admin")
+  assert trove.get_in(db, keyspace: users, key: "carol") == Ok("member")
+  assert trove.get_in(db, keyspace: users, key: "dave") == Ok("member")
+}

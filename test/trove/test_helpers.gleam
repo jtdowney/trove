@@ -32,6 +32,15 @@ pub fn with_store(callback: fn(store.Store) -> Nil) -> Nil {
   Nil
 }
 
+pub fn with_open_db(callback: fn(trove.Db(Int, String)) -> Nil) -> Nil {
+  let dir = temp_dir()
+  let assert Ok(db) = trove.open(int_string_config(dir))
+  callback(db)
+  trove.close(db)
+  let assert Ok(_) = simplifile.delete_all([dir])
+  Nil
+}
+
 pub fn insert(
   tree tree: btree.Btree(Int, String),
   store store: store.Store,

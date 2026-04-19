@@ -106,9 +106,10 @@ pub fn crash_recovery_between_commits_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(h1_offset) = store.put_header(store: s, header: header1)
-  let committed_1 = h1_offset + store.header_size
+  let committed_1 = h1_offset + store.encoded_size(header: header1)
 
   let assert Ok(tree2) =
     test_helpers.insert(tree: tree1, store: s, key: 2, value: "v2")
@@ -117,9 +118,10 @@ pub fn crash_recovery_between_commits_test() {
       root: btree.root(tree2),
       size: btree.size(tree2),
       dirt: btree.dirt(tree2),
+      keyspaces: [],
     )
   let assert Ok(h2_offset) = store.put_header(store: s, header: header2)
-  let committed_2 = h2_offset + store.header_size
+  let committed_2 = h2_offset + store.encoded_size(header: header2)
 
   let assert Ok(Nil) = store.close(store: s)
   let assert Ok(full_bytes) = simplifile.read_bits(path)
@@ -148,9 +150,10 @@ pub fn crash_recovery_before_first_commit_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(h1_offset) = store.put_header(store: s, header: header1)
-  let committed_1 = h1_offset + store.header_size
+  let committed_1 = h1_offset + store.encoded_size(header: header1)
 
   let assert Ok(Nil) = store.close(store: s)
   let assert Ok(full_bytes) = simplifile.read_bits(path)
@@ -183,9 +186,10 @@ pub fn crash_recovery_exact_commit_boundary_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(h1_offset) = store.put_header(store: s, header: header1)
-  let committed_1 = h1_offset + store.header_size
+  let committed_1 = h1_offset + store.encoded_size(header: header1)
 
   let assert Ok(Nil) = store.close(store: s)
   let assert Ok(full_bytes) = simplifile.read_bits(path)
@@ -321,9 +325,10 @@ pub fn crash_recovery_three_states_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(h1_off) = store.put_header(store: s, header: h1)
-  let c1 = h1_off + store.header_size
+  let c1 = h1_off + store.encoded_size(header: h1)
 
   let assert Ok(tree2) =
     test_helpers.insert(tree: tree1, store: s, key: 2, value: "b")
@@ -332,9 +337,10 @@ pub fn crash_recovery_three_states_test() {
       root: btree.root(tree2),
       size: btree.size(tree2),
       dirt: btree.dirt(tree2),
+      keyspaces: [],
     )
   let assert Ok(h2_off) = store.put_header(store: s, header: h2)
-  let c2 = h2_off + store.header_size
+  let c2 = h2_off + store.encoded_size(header: h2)
 
   let assert Ok(tree3) =
     test_helpers.insert(tree: tree2, store: s, key: 3, value: "c")
@@ -343,9 +349,10 @@ pub fn crash_recovery_three_states_test() {
       root: btree.root(tree3),
       size: btree.size(tree3),
       dirt: btree.dirt(tree3),
+      keyspaces: [],
     )
   let assert Ok(h3_off) = store.put_header(store: s, header: h3)
-  let c3 = h3_off + store.header_size
+  let c3 = h3_off + store.encoded_size(header: h3)
 
   let assert Ok(Nil) = store.close(store: s)
   let assert Ok(full_bytes) = simplifile.read_bits(path)
@@ -407,6 +414,7 @@ pub fn deep_corruption_rejected_during_validation_test() {
       root: btree.root(tree3),
       size: btree.size(tree3),
       dirt: btree.dirt(tree3),
+      keyspaces: [],
     )
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
@@ -455,7 +463,13 @@ pub fn leaf_pointing_to_tree_node_rejected_test() {
     )
   let assert Ok(bad_leaf_loc) = store.put_node(store: s, data: bad_leaf_bytes)
 
-  let header = store.Header(root: option.Some(bad_leaf_loc), size: 1, dirt: 0)
+  let header =
+    store.Header(
+      root: option.Some(bad_leaf_loc),
+      size: 1,
+      dirt: 0,
+      keyspaces: [],
+    )
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
 
@@ -487,7 +501,13 @@ pub fn branch_pointing_to_data_node_rejected_test() {
   let assert Ok(bad_branch_loc) =
     store.put_node(store: s, data: bad_branch_bytes)
 
-  let header = store.Header(root: option.Some(bad_branch_loc), size: 1, dirt: 0)
+  let header =
+    store.Header(
+      root: option.Some(bad_branch_loc),
+      size: 1,
+      dirt: 0,
+      keyspaces: [],
+    )
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
 

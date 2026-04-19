@@ -6,6 +6,7 @@ import qcheck
 import simplifile
 import trove/internal/btree
 import trove/internal/store
+import trove/internal/store/file_ffi
 import trove/test_helpers
 
 pub fn blank_new_store_test() {
@@ -54,7 +55,8 @@ pub fn multiple_nodes_distinct_locations_test() {
 
 pub fn put_header_and_recover_test() {
   use s <- test_helpers.with_store()
-  let header = store.Header(root: option.Some(42), size: 10, dirt: 3)
+  let header =
+    store.Header(root: option.Some(42), size: 10, dirt: 3, keyspaces: [])
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(recovered) = store.get_latest_header(store: s)
   assert recovered == header
@@ -62,8 +64,8 @@ pub fn put_header_and_recover_test() {
 
 pub fn latest_header_returns_last_test() {
   use s <- test_helpers.with_store()
-  let h1 = store.Header(root: option.Some(1), size: 10, dirt: 0)
-  let h2 = store.Header(root: option.Some(2), size: 20, dirt: 5)
+  let h1 = store.Header(root: option.Some(1), size: 10, dirt: 0, keyspaces: [])
+  let h2 = store.Header(root: option.Some(2), size: 20, dirt: 5, keyspaces: [])
 
   let assert Ok(_) = store.put_header(store: s, header: h1)
   let assert Ok(_) = store.put_header(store: s, header: h2)
@@ -80,13 +82,14 @@ pub fn empty_store_no_header_test() {
 
 pub fn nodes_between_headers_dont_interfere_test() {
   use s <- test_helpers.with_store()
-  let h1 = store.Header(root: option.Some(100), size: 5, dirt: 1)
+  let h1 = store.Header(root: option.Some(100), size: 5, dirt: 1, keyspaces: [])
   let assert Ok(_) = store.put_header(store: s, header: h1)
 
   let assert Ok(_) = store.put_node(store: s, data: <<"noise1":utf8>>)
   let assert Ok(_) = store.put_node(store: s, data: <<"noise2":utf8>>)
 
-  let h2 = store.Header(root: option.Some(200), size: 15, dirt: 3)
+  let h2 =
+    store.Header(root: option.Some(200), size: 15, dirt: 3, keyspaces: [])
   let assert Ok(_) = store.put_header(store: s, header: h2)
 
   let assert Ok(recovered) = store.get_latest_header(store: s)
@@ -95,10 +98,60 @@ pub fn nodes_between_headers_dont_interfere_test() {
 
 pub fn header_with_no_root_roundtrip_test() {
   use s <- test_helpers.with_store()
-  let header = store.Header(root: option.None, size: 0, dirt: 0)
+  let header = store.Header(root: option.None, size: 0, dirt: 0, keyspaces: [])
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(recovered) = store.get_latest_header(store: s)
   assert recovered == header
+}
+
+pub fn multi_block_header_roundtrip_test() {
+  use s <- test_helpers.with_store()
+
+  // 200 keyspaces with 16-char names yield a record well past one 1024-byte
+  // block, exercising the multi-block header path on both encode and decode.
+  let keyspaces =
+    list.map(test_helpers.int_list(from: 0, to: 199), fn(i) {
+      let name = "keyspace_" <> int.to_string(i + 100_000)
+      store.KeyspaceHeader(
+        name: name,
+        root: option.Some(i * 128),
+        size: i,
+        dirt: 0,
+      )
+    })
+  let header =
+    store.Header(root: option.Some(64), size: 1, dirt: 0, keyspaces: keyspaces)
+
+  assert store.encoded_size(header: header) > 1024
+
+  let assert Ok(_) = store.put_header(store: s, header: header)
+  let assert Ok(recovered) = store.get_latest_header(store: s)
+  assert recovered == header
+}
+
+pub fn legacy_v1_header_reads_as_empty_keyspaces_test() {
+  let dir = test_helpers.temp_dir()
+  let path = dir <> "/legacy.db"
+
+  // Hand-encode the legacy v1 record (marker 0x2A, 25-byte payload, 16-byte
+  // checksum) so we can prove the decoder still accepts it even though new
+  // writes always emit v2.
+  let fields = <<
+    1:8,
+    42:int-big-size(64),
+    10:int-big-size(64),
+    3:int-big-size(64),
+  >>
+  let checksum = file_ffi.hash(data: fields)
+  let record = <<0x2A:8, fields:bits, checksum:bits>>
+  let assert Ok(Nil) = simplifile.write_bits(path, record)
+
+  let assert Ok(s) = store.open(path: path)
+  let assert Ok(recovered) = store.get_latest_header(store: s)
+  assert recovered
+    == store.Header(root: option.Some(42), size: 10, dirt: 3, keyspaces: [])
+  let assert Ok(Nil) = store.close(store: s)
+  let assert Ok(_) = simplifile.delete_all([dir])
 }
 
 pub fn open_reader_can_read_existing_data_test() {
@@ -172,7 +225,8 @@ pub fn multiple_nodes_roundtrip_property_test() {
 pub fn get_node_invalid_location_returns_error_test() {
   use s <- test_helpers.with_store()
   let assert Ok(_) = store.put_node(store: s, data: <<"hello":utf8>>)
-  let header = store.Header(root: option.Some(42), size: 1, dirt: 0)
+  let header =
+    store.Header(root: option.Some(42), size: 1, dirt: 0, keyspaces: [])
   let assert Ok(header_loc) = store.put_header(store: s, header: header)
   let assert Error(_) = store.get_node(store: s, location: header_loc)
   Nil
@@ -183,12 +237,30 @@ pub fn header_roundtrip_property_test() {
     qcheck.from_generators(qcheck.return(option.None), [
       qcheck.map(qcheck.bounded_int(from: 0, to: 100_000), option.Some),
     ])
-  let header_gen =
-    qcheck.map3(
+  let keyspace_gen =
+    qcheck.map4(
+      qcheck.string(),
       root_gen,
       qcheck.bounded_int(0, 10_000),
       qcheck.bounded_int(0, 10_000),
-      fn(root, size, dirt) { store.Header(root: root, size: size, dirt: dirt) },
+      fn(name, root, size, dirt) {
+        store.KeyspaceHeader(name:, root:, size:, dirt:)
+      },
+    )
+  let keyspaces_gen =
+    qcheck.generic_list(
+      elements_from: keyspace_gen,
+      length_from: qcheck.bounded_int(0, 10),
+    )
+  let header_gen =
+    qcheck.map4(
+      root_gen,
+      qcheck.bounded_int(0, 10_000),
+      qcheck.bounded_int(0, 10_000),
+      keyspaces_gen,
+      fn(root, size, dirt, keyspaces) {
+        store.Header(root:, size:, dirt:, keyspaces:)
+      },
     )
 
   use header <- qcheck.run(test_helpers.property_config(), header_gen)
@@ -211,15 +283,16 @@ pub fn truncated_header_recovery_test() {
   let path = dir <> "/test.db"
   let assert Ok(s) = store.open(path: path)
 
-  let valid_header = store.Header(root: option.Some(42), size: 10, dirt: 3)
+  let valid_header =
+    store.Header(root: option.Some(42), size: 10, dirt: 3, keyspaces: [])
   let assert Ok(_) = store.put_header(store: s, header: valid_header)
   let assert Ok(Nil) = store.close(store: s)
 
-  // The valid header is 42 bytes at offset 0. Pad to the next block boundary
-  // (1024) and write a 0x2A marker followed by truncated garbage.
-  let padding_size = 1024 - store.header_size
+  // Pad past the valid header's record to the next block boundary (1024)
+  // and write a 0x2B marker followed by truncated garbage.
+  let padding_size = 1024 - store.encoded_size(header: valid_header)
   let padding = <<0:size(padding_size)-unit(8)>>
-  let corrupt = <<0x2A, 0xFF, 0xFF>>
+  let corrupt = <<0x2B, 0xFF, 0xFF>>
   let assert Ok(Nil) =
     simplifile.append_bits(path, <<padding:bits, corrupt:bits>>)
 
@@ -236,10 +309,10 @@ pub fn corrupt_only_file_returns_no_header_test() {
   let dir = test_helpers.temp_dir()
   let path = dir <> "/test.db"
 
-  // Write a file containing only a 0x2A marker and truncated garbage at
+  // Write a file containing only a 0x2B marker and truncated garbage at
   // offset 0. No valid header exists. The scan should skip the corrupt
   // marker and report "no header found" rather than "corrupt header".
-  let assert Ok(Nil) = simplifile.write_bits(path, <<0x2A, 0xDE, 0xAD>>)
+  let assert Ok(Nil) = simplifile.write_bits(path, <<0x2B, 0xDE, 0xAD>>)
 
   let assert Ok(s) = store.open(path: path)
   let assert Error(store.NoHeaderFound) = store.get_latest_header(store: s)
@@ -262,6 +335,7 @@ pub fn corrupted_header_marker_rejects_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(h_offset) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
@@ -299,6 +373,7 @@ pub fn corrupted_header_size_field_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(h_offset) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
@@ -338,6 +413,7 @@ pub fn corrupted_node_marker_rejects_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(_) = store.put_header(store: s, header: header)
   let assert Ok(Nil) = store.close(store: s)
@@ -386,6 +462,7 @@ pub fn random_bit_flip_store_recovery_property_test() {
       root: btree.root(tree1),
       size: btree.size(tree1),
       dirt: btree.dirt(tree1),
+      keyspaces: [],
     )
   let assert Ok(_) = store.put_header(store: s, header: h1)
 
@@ -396,6 +473,7 @@ pub fn random_bit_flip_store_recovery_property_test() {
       root: btree.root(tree2),
       size: btree.size(tree2),
       dirt: btree.dirt(tree2),
+      keyspaces: [],
     )
   let assert Ok(_) = store.put_header(store: s, header: h2)
   let assert Ok(Nil) = store.close(store: s)
@@ -455,7 +533,12 @@ pub fn interleaved_header_recovery_property_test() {
         })
 
         let header =
-          store.Header(root: option.Some(i * 100), size: i, dirt: i - 1)
+          store.Header(
+            root: option.Some(i * 100),
+            size: i,
+            dirt: i - 1,
+            keyspaces: [],
+          )
         let assert Ok(_) = store.put_header(store: s, header: header)
         option.Some(header)
       },
