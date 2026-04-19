@@ -322,7 +322,7 @@ pub fn corrupt_only_file_returns_no_header_test() {
   Nil
 }
 
-pub fn corrupted_header_marker_rejects_test() {
+fn write_header_then_mutate_bytes(mutate: fn(BitArray, Int) -> BitArray) -> Nil {
   let dir = test_helpers.temp_dir()
   let path = dir <> "/corrupt.db"
   let assert Ok(s) = store.open(path: path)
@@ -341,15 +341,7 @@ pub fn corrupted_header_marker_rejects_test() {
   let assert Ok(Nil) = store.close(store: s)
 
   let assert Ok(bytes) = simplifile.read_bits(path)
-
-  let assert Ok(before) = bit_array.slice(bytes, 0, h_offset)
-  let assert Ok(after) =
-    bit_array.slice(
-      bytes,
-      h_offset + 1,
-      bit_array.byte_size(bytes) - h_offset - 1,
-    )
-  let corrupted = bit_array.concat([before, <<0x00>>, after])
+  let corrupted = mutate(bytes, h_offset)
   let assert Ok(Nil) = simplifile.write_bits(path, corrupted)
 
   let assert Ok(s2) = store.open(path: path)
@@ -360,26 +352,20 @@ pub fn corrupted_header_marker_rejects_test() {
   Nil
 }
 
-pub fn corrupted_header_size_field_test() {
-  let dir = test_helpers.temp_dir()
-  let path = dir <> "/corrupt.db"
-  let assert Ok(s) = store.open(path: path)
-
-  let tree0 = btree.new()
-  let assert Ok(tree1) =
-    test_helpers.insert(tree: tree0, store: s, key: 1, value: "v1")
-  let header =
-    store.Header(
-      root: btree.root(tree1),
-      size: btree.size(tree1),
-      dirt: btree.dirt(tree1),
-      keyspaces: [],
+pub fn corrupted_header_marker_rejects_test() {
+  use bytes, h_offset <- write_header_then_mutate_bytes()
+  let assert Ok(before) = bit_array.slice(bytes, 0, h_offset)
+  let assert Ok(after) =
+    bit_array.slice(
+      bytes,
+      h_offset + 1,
+      bit_array.byte_size(bytes) - h_offset - 1,
     )
-  let assert Ok(h_offset) = store.put_header(store: s, header: header)
-  let assert Ok(Nil) = store.close(store: s)
+  bit_array.concat([before, <<0x00>>, after])
+}
 
-  let assert Ok(bytes) = simplifile.read_bits(path)
-
+pub fn corrupted_header_size_field_test() {
+  use bytes, h_offset <- write_header_then_mutate_bytes()
   let size_offset = h_offset + 10
   let assert Ok(before) = bit_array.slice(bytes, 0, size_offset)
   let assert Ok(after) =
@@ -388,16 +374,7 @@ pub fn corrupted_header_size_field_test() {
       size_offset + 8,
       bit_array.byte_size(bytes) - size_offset - 8,
     )
-  let corrupted =
-    bit_array.concat([before, <<999_999_999:int-big-size(64)>>, after])
-  let assert Ok(Nil) = simplifile.write_bits(path, corrupted)
-
-  let assert Ok(s2) = store.open(path: path)
-  let assert Error(_) = store.get_latest_header(store: s2)
-  let assert Ok(Nil) = store.close(store: s2)
-
-  let assert Ok(_) = simplifile.delete_all([dir])
-  Nil
+  bit_array.concat([before, <<999_999_999:int-big-size(64)>>, after])
 }
 
 pub fn corrupted_node_marker_rejects_test() {

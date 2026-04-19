@@ -1,6 +1,9 @@
+import exception
+import gleam/dict
 import gleam/int
 import gleam/list
 import gleam/option
+import gleam/string
 import gleam/yielder
 import qcheck
 import simplifile
@@ -32,13 +35,50 @@ pub fn with_store(callback: fn(store.Store) -> Nil) -> Nil {
   Nil
 }
 
+pub fn int_string_config(path: String) -> trove.Config(Int, String) {
+  trove.Config(
+    path: path,
+    key_codec: codec.int(),
+    value_codec: codec.string(),
+    key_compare: int.compare,
+    auto_compact: trove.NoAutoCompact,
+    auto_file_sync: trove.ManualSync,
+    call_timeout: 5000,
+  )
+}
+
+pub fn string_string_config(path: String) -> trove.Config(String, String) {
+  trove.Config(
+    path: path,
+    key_codec: codec.string(),
+    value_codec: codec.string(),
+    key_compare: string.compare,
+    auto_compact: trove.NoAutoCompact,
+    auto_file_sync: trove.ManualSync,
+    call_timeout: 5000,
+  )
+}
+
 pub fn with_open_db(callback: fn(trove.Db(Int, String)) -> Nil) -> Nil {
   let dir = temp_dir()
   let assert Ok(db) = trove.open(int_string_config(dir))
+  use <- exception.defer(fn() {
+    trove.close(db)
+    let _ = simplifile.delete_all([dir])
+    Nil
+  })
   callback(db)
-  trove.close(db)
-  let assert Ok(_) = simplifile.delete_all([dir])
-  Nil
+}
+
+pub fn with_string_db(callback: fn(trove.Db(String, String)) -> Nil) -> Nil {
+  let dir = temp_dir()
+  let assert Ok(db) = trove.open(string_string_config(dir))
+  use <- exception.defer(fn() {
+    trove.close(db)
+    let _ = simplifile.delete_all([dir])
+    Nil
+  })
+  callback(db)
 }
 
 pub fn insert(
@@ -162,6 +202,10 @@ pub fn property_config() -> qcheck.Config {
   qcheck.default_config() |> qcheck.with_test_count(100)
 }
 
+pub fn small_property_config() -> qcheck.Config {
+  qcheck.default_config() |> qcheck.with_test_count(25)
+}
+
 pub fn int_list(from start: Int, to stop: Int) -> List(Int) {
   case start > stop {
     True -> []
@@ -169,19 +213,72 @@ pub fn int_list(from start: Int, to stop: Int) -> List(Int) {
   }
 }
 
-pub fn int_string_config(path: String) -> trove.Config(Int, String) {
-  trove.Config(
-    path: path,
-    key_codec: codec.int(),
-    value_codec: codec.string(),
-    key_compare: int.compare,
-    auto_compact: trove.NoAutoCompact,
-    auto_file_sync: trove.ManualSync,
-    call_timeout: 5000,
-  )
-}
-
 pub fn make_entries(from: Int, to: Int) -> List(#(Int, String)) {
   int_list(from: from, to: to)
   |> list.map(fn(i) { #(i, "val" <> int.to_string(i)) })
+}
+
+pub type Op {
+  OpPut(key: Int, value: String)
+  OpDelete(key: Int)
+}
+
+pub fn op_generator() -> qcheck.Generator(Op) {
+  let key_gen = qcheck.bounded_int(0, 99)
+  let value_gen = qcheck.non_empty_string()
+
+  qcheck.from_generators(
+    qcheck.map2(key_gen, value_gen, fn(k, v) { OpPut(k, v) }),
+    [qcheck.map(key_gen, fn(k) { OpDelete(k) })],
+  )
+}
+
+pub fn apply_ops(
+  db: trove.Db(Int, String),
+  ops: List(Op),
+) -> dict.Dict(Int, String) {
+  list.fold(ops, dict.new(), fn(reference, op) {
+    case op {
+      OpPut(key, value) -> {
+        trove.put(db, key: key, value: value)
+        dict.insert(reference, key, value)
+      }
+      OpDelete(key) -> {
+        trove.delete(db, key: key)
+        dict.delete(reference, key)
+      }
+    }
+  })
+}
+
+pub fn reference_sorted(
+  reference: dict.Dict(Int, String),
+) -> List(#(Int, String)) {
+  dict.to_list(reference)
+  |> list.sort(fn(a, b) { int.compare(a.0, b.0) })
+}
+
+pub fn assert_range_matches_reference(
+  db: trove.Db(Int, String),
+  reference: dict.Dict(Int, String),
+) -> Nil {
+  let expected = reference_sorted(reference)
+
+  let forward_list =
+    trove.range(
+      db,
+      min: option.None,
+      max: option.None,
+      direction: range.Forward,
+    )
+  assert forward_list == expected
+
+  let reverse_list =
+    trove.range(
+      db,
+      min: option.None,
+      max: option.None,
+      direction: range.Reverse,
+    )
+  assert reverse_list == list.reverse(expected)
 }

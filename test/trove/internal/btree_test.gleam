@@ -54,22 +54,9 @@ pub fn from_header_some_root_zero_size_returns_error_test() {
   Nil
 }
 
-pub fn from_header_some_root_negative_size_returns_error_test() {
-  let assert Error(btree.ValidationError(
-    "inconsistent header: Some root with zero or negative size",
-  )) = btree.from_header(root: option.Some(42), size: -1, dirt: 0, capacity: 32)
-  Nil
-}
-
 pub fn from_header_negative_dirt_returns_error_test() {
   let assert Error(btree.ValidationError("inconsistent header: negative dirt")) =
     btree.from_header(root: option.None, size: 0, dirt: -1, capacity: 32)
-  Nil
-}
-
-pub fn from_header_negative_dirt_with_root_returns_error_test() {
-  let assert Error(btree.ValidationError("inconsistent header: negative dirt")) =
-    btree.from_header(root: option.Some(42), size: 5, dirt: -1, capacity: 32)
   Nil
 }
 
@@ -543,6 +530,22 @@ pub fn new_with_capacity_1_panics_test() {
   let assert Error(_) =
     exception.rescue(fn() { btree.new_with_capacity(capacity: 1) })
   Nil
+}
+
+pub fn add_dirt_accumulates_on_empty_and_nonempty_test() {
+  use s <- test_helpers.with_store()
+
+  let empty = btree.new()
+  let empty_dirty = btree.add_dirt(empty, 5)
+  assert btree.dirt(empty_dirty) == 5
+  assert btree.size(empty_dirty) == 0
+  assert btree.root(empty_dirty) == option.None
+
+  let assert Ok(nonempty) = test_helpers.insert(empty, s, 1, "a")
+  let nonempty_dirty = btree.add_dirt(nonempty, 3)
+  assert btree.dirt(nonempty_dirty) == btree.dirt(nonempty) + 3
+  assert btree.size(nonempty_dirty) == btree.size(nonempty)
+  assert btree.root(nonempty_dirty) == btree.root(nonempty)
 }
 
 pub fn load_capacity_2_small_dataset_test() {

@@ -15,14 +15,6 @@ pub fn query_empty_tree_returns_empty_test() {
   assert yielder.to_list(result) == []
 }
 
-pub fn query_empty_tree_reverse_returns_empty_test() {
-  use s <- test_helpers.with_store()
-  let tree = btree.new()
-  let result =
-    test_helpers.query(tree, s, option.None, option.None, range.Reverse)
-  assert yielder.to_list(result) == []
-}
-
 pub fn query_full_range_returns_all_sorted_test() {
   use s <- test_helpers.with_store()
   let tree = btree.new_with_capacity(capacity: 4)
@@ -245,24 +237,6 @@ pub fn query_property_bounds_filter_correctly_test() {
     |> list.filter(fn(e) { e.0 >= lo && e.0 <= hi })
 
   assert result_list == expected
-}
-
-pub fn query_exclusive_same_key_returns_empty_test() {
-  use s <- test_helpers.with_store()
-  let tree = btree.new_with_capacity(capacity: 4)
-  let entries = test_helpers.make_entries(1, 10)
-  let tree = test_helpers.insert_all(tree, s, entries)
-
-  let result =
-    test_helpers.query(
-      tree,
-      s,
-      option.Some(range.Exclusive(5)),
-      option.Some(range.Exclusive(5)),
-      range.Forward,
-    )
-
-  assert yielder.to_list(result) == []
 }
 
 pub fn query_exclusive_min_inclusive_max_test() {

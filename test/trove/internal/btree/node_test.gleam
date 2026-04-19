@@ -238,3 +238,27 @@ pub fn extract_locations_rejects_zero_children_test() {
   let assert Error(Nil) = node.extract_locations(data: <<0x01, 0:32>>)
   let assert Error(Nil) = node.extract_locations(data: <<0x02, 0:32>>)
 }
+
+pub fn node_kind_classifies_each_tag_test() {
+  assert node.node_kind(data: <<0x01>>) == Ok(node.TreeKind)
+  assert node.node_kind(data: <<0x02>>) == Ok(node.TreeKind)
+  assert node.node_kind(data: <<0x03>>) == Ok(node.DataKind)
+  assert node.node_kind(data: <<0x04>>) == Ok(node.DataKind)
+  assert node.node_kind(data: <<0xFF>>) == Error(Nil)
+  assert node.node_kind(data: <<>>) == Error(Nil)
+}
+
+pub fn is_leaf_only_true_for_leaf_tag_test() {
+  assert node.is_leaf(data: <<0x01, 0:32>>) == True
+  assert node.is_leaf(data: <<0x02, 0:32>>) == False
+  assert node.is_leaf(data: <<0x03>>) == False
+  assert node.is_leaf(data: <<0x04>>) == False
+  assert node.is_leaf(data: <<>>) == False
+}
+
+pub fn is_tombstone_only_true_for_encoded_tombstone_test() {
+  assert node.is_tombstone(data: node.encode_tombstone()) == True
+  assert node.is_tombstone(data: <<0x04>>) == True
+  assert node.is_tombstone(data: <<0x03, "x":utf8>>) == False
+  assert node.is_tombstone(data: <<0x01>>) == False
+}

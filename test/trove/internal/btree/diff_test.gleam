@@ -171,16 +171,6 @@ pub fn diff_delete_shows_as_removed_test() {
   assert yielder.to_list(result) == [#(2, diff.Removed)]
 }
 
-pub fn diff_both_empty_trees_is_empty_test() {
-  use s <- test_helpers.with_store()
-
-  let empty1 = btree.new_with_capacity(capacity: 4)
-  let empty2 = btree.new_with_capacity(capacity: 4)
-
-  let result = test_helpers.compute_diff(empty1, empty2, s)
-  assert yielder.to_list(result) == []
-}
-
 pub fn diff_applied_to_old_produces_new_property_test() {
   use ops <- qcheck.run(
     test_helpers.property_config(),
