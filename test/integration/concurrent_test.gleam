@@ -158,7 +158,7 @@ pub fn sequential_snapshot_consistency_test() {
   Nil
 }
 
-/// Concurrent writes through transactions are serialized — no lost updates.
+/// Concurrent writes through transactions are serialized: no lost updates.
 pub fn concurrent_transaction_serialization_test() {
   let dir = test_helpers.temp_dir()
   let config = test_helpers.int_string_config(dir)

@@ -1,7 +1,7 @@
 //// An embedded, crash-safe key-value store for Gleam.
 ////
 //// trove stores data in an append-only B+ tree on disk. Every write appends
-//// new nodes and creates a new root — old data is never overwritten. This
+//// new nodes and creates a new root. Old data is never overwritten, which
 //// gives you crash safety, zero-cost MVCC snapshots, and single-writer /
 //// multiple-reader concurrency backed by an OTP actor.
 ////
@@ -86,8 +86,8 @@ pub type OpenError {
 pub type AutoCompact {
   /// Enable auto-compaction. `min_dirt` is the minimum number of mutation
   /// operations (inserts, updates, and deletes each add one to the dirt count)
-  /// and `min_dirt_factor` is the minimum dirt ratio (0.0–1.0) — both must be
-  /// exceeded for compaction to trigger.
+  /// and `min_dirt_factor` is the minimum dirt ratio (0.0 to 1.0). Both must
+  /// be exceeded for compaction to trigger.
   AutoCompact(min_dirt: Int, min_dirt_factor: Float)
   /// Disable auto-compaction. Compaction can still be triggered manually
   /// with `compact`.
@@ -104,16 +104,21 @@ pub type FileSync {
 
 /// Database configuration passed to `open`.
 ///
-/// - `path` — directory where store files are kept (created if needed)
-/// - `key_codec` / `value_codec` — how to serialize keys and values to bytes.
-///   Must satisfy `decode(encode(v)) == Ok(v)` and be deterministic (same input
-///   always produces the same bytes).
-/// - `key_compare` — total order over keys: must be deterministic, antisymmetric,
-///   and transitive. Must be consistent with `key_codec` — keys that compare
-///   `Eq` must encode to identical bytes.
-/// - `auto_compact` — controls automatic compaction after writes
-/// - `auto_file_sync` — controls whether writes are automatically fsynced
-/// - `call_timeout` — milliseconds to wait for actor responses (5000 is a good starting point)
+/// `path` is the directory where store files are kept (created if needed).
+///
+/// `key_codec` and `value_codec` control how keys and values are serialized
+/// to bytes. Both must satisfy `decode(encode(v)) == Ok(v)` and produce the
+/// same output for the same input.
+///
+/// `key_compare` is a total order over keys: deterministic, antisymmetric,
+/// and transitive. It must agree with `key_codec`, so keys that compare
+/// as `Eq` encode to identical bytes.
+///
+/// `auto_compact` toggles automatic compaction after writes. `auto_file_sync`
+/// controls whether writes are automatically fsynced.
+///
+/// `call_timeout` is the number of milliseconds to wait for actor responses;
+/// 5000 is a reasonable starting point.
 pub type Config(k, v) {
   Config(
     path: String,
@@ -406,7 +411,7 @@ pub fn open(config: Config(k, v)) -> Result(Db(k, v), OpenError) {
 }
 
 /// Close the database and release the file handle and path lock. Does not
-/// fsync — if using `ManualSync`, call `file_sync` before closing to ensure
+/// fsync. If using `ManualSync`, call `file_sync` before closing to ensure
 /// durability. The `Db` handle must not be used after calling this.
 ///
 /// **Panics** if the store file handle cannot be closed.
@@ -456,7 +461,7 @@ pub fn is_empty(db: Db(k, v)) -> Bool {
 /// Overwrites and deletes increment the dirt counter because they write new
 /// nodes that make old ones unreachable. New inserts do not increment dirt
 /// since they don't supersede existing data. The formula is
-/// `dirt / (1 + size + dirt)` — the `+1` ensures the result is always
+/// `dirt / (1 + size + dirt)`; the `+1` ensures the result is always
 /// well-defined, even for an empty tree. The value approaches but never
 /// reaches 1.0. Higher values mean more wasted space that compaction would
 /// reclaim.
@@ -613,13 +618,13 @@ pub type Snapshot(k, v) =
 ///
 /// The `timeout` parameter (in milliseconds) controls how long the caller
 /// waits for the transaction to complete, including queue wait time and
-/// callback execution. Choose a value appropriate for your workload —
-/// queued operations or auto-compaction may delay the start, and a
+/// callback execution. Choose a value appropriate for your workload.
+/// Queued operations or auto-compaction may delay the start, and a
 /// long-running callback consumes the remaining budget.
 ///
 /// **Important:** The callback runs inside the database actor. Do not call
 /// any `trove` functions (such as `get`, `put`, `compact`, etc.) on the
-/// same `Db` handle from within the callback — this will deadlock the actor
+/// same `Db` handle from within the callback; this will deadlock the actor
 /// until the call timeout fires. Use the `Tx` handle (`tx_get`, `tx_put`,
 /// `tx_delete`) for all reads and writes inside the transaction.
 ///
@@ -628,8 +633,8 @@ pub type Snapshot(k, v) =
 /// `tx_put`/`tx_delete`).
 ///
 /// **Non-escaping:** The `Tx` handle is only valid inside the callback.
-/// Do not store it in a variable, send it to another process, or return it —
-/// using a `Tx` after the callback returns will panic or produce undefined
+/// Do not store it in a variable, send it to another process, or return it.
+/// Using a `Tx` after the callback returns will panic or produce undefined
 /// behavior.
 ///
 /// **Timeout semantics:** If the timeout fires while the callback is still
@@ -782,6 +787,9 @@ pub fn tx_has_key(tx tx: Tx(k, v), key key: k) -> Bool {
 
 /// Look up a key in a named keyspace within a transaction. Sees writes made
 /// earlier in the same transaction.
+///
+/// **Panics** if the keyspace has not been registered in this session via
+/// `trove.keyspace(...)`, or on store I/O or decode errors.
 pub fn tx_get_in(
   tx tx: Tx(k_default, v_default),
   keyspace keyspace: Keyspace(k, v),
@@ -797,6 +805,9 @@ pub fn tx_get_in(
 
 /// Insert or update a key-value pair in a named keyspace within a
 /// transaction. Returns the updated `Tx`.
+///
+/// **Panics** if the keyspace has not been registered in this session via
+/// `trove.keyspace(...)`, or on store I/O errors.
 pub fn tx_put_in(
   tx tx: Tx(k_default, v_default),
   keyspace keyspace: Keyspace(k, v),
@@ -812,6 +823,9 @@ pub fn tx_put_in(
 }
 
 /// Delete a key from a named keyspace within a transaction.
+///
+/// **Panics** if the keyspace has not been registered in this session via
+/// `trove.keyspace(...)`, or on store I/O errors.
 pub fn tx_delete_in(
   tx tx: Tx(k_default, v_default),
   keyspace keyspace: Keyspace(k, v),
@@ -825,6 +839,9 @@ pub fn tx_delete_in(
 }
 
 /// Check whether a key exists in a named keyspace within a transaction.
+///
+/// **Panics** if the keyspace has not been registered in this session via
+/// `trove.keyspace(...)`, or on store I/O or decode errors.
 pub fn tx_has_key_in(
   tx tx: Tx(k_default, v_default),
   keyspace keyspace: Keyspace(k, v),
@@ -834,12 +851,12 @@ pub fn tx_has_key_in(
 }
 
 /// Run a callback with a point-in-time snapshot. The snapshot sees the state
-/// of the database at the moment it was acquired — subsequent writes are
+/// of the database at the moment it was acquired; subsequent writes are
 /// invisible to it.
 ///
 /// **Non-escaping:** The `Snapshot` handle is only valid inside the callback.
-/// Do not store it in a variable, send it to another process, or return it —
-/// using a `Snapshot` after the callback returns will panic or produce
+/// Do not store it in a variable, send it to another process, or return it.
+/// Using a `Snapshot` after the callback returns will panic or produce
 /// undefined behavior because the underlying file handle is closed on exit.
 ///
 /// **Panics** if the snapshot file handle cannot be opened.
@@ -957,6 +974,9 @@ pub fn range(
 
 /// Look up a key in a named keyspace within a snapshot.
 ///
+/// **Panics** if the keyspace was not registered before the snapshot was
+/// acquired, or on store read or decode errors.
+///
 /// ```gleam
 /// trove.with_snapshot(db, fn(snap) {
 ///   trove.snapshot_get_in(snap, keyspace: users, key: "alice")
@@ -980,6 +1000,9 @@ pub fn snapshot_get_in(
 ///
 /// The yielder holds a reference to the snapshot's file handle; consume it
 /// before the snapshot closes.
+///
+/// **Panics** if the keyspace was not registered before the snapshot was
+/// acquired, or on store read or decode errors during iteration.
 ///
 /// ```gleam
 /// trove.with_snapshot(db, fn(snap) {
@@ -1029,6 +1052,10 @@ fn encode_bound(
 /// Iterate over entries in a named keyspace within optional key bounds.
 /// Returns a `List` of key-value pairs. For large result sets, use
 /// `with_snapshot` and `snapshot_range_in` instead.
+///
+/// **Panics** if the keyspace has not been registered in this session via
+/// `trove.keyspace(...)`, if the snapshot file handle cannot be opened,
+/// or on store read or decode errors during iteration.
 ///
 /// ```gleam
 /// let results = trove.range_in(

@@ -58,7 +58,7 @@ let assert Error(Nil) = trove.get(db, key: "key")
 
 ### Batch Operations
 
-All entries in a batch are written atomically — one header write covers
+All entries in a batch are written atomically: one header write covers
 the entire batch.
 
 ```gleam
@@ -237,7 +237,7 @@ let config = trove.Config(
 
 ## How It Works
 
-trove stores data in an append-only B+ tree on disk. Every write appends new nodes to the file and creates a new root — old data is never overwritten. This gives you:
+trove stores data in an append-only B+ tree on disk. Every write appends new nodes to the file and creates a new root. Old data is never overwritten, which gives you:
 
 - Crash safety - a write is only committed when its header is fully written. Partial writes are detected and skipped on recovery.
 - Zero-cost snapshots - a snapshot is just a pointer to an old root. The append-only structure guarantees those nodes remain valid.
