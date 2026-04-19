@@ -87,7 +87,7 @@ pub fn get_other_trees(tx tx: Tx(k, v)) -> dict.Dict(String, KeyspaceEntry) {
 }
 
 /// Look up a key within the transaction, seeing any writes made so far.
-pub fn get(tx tx: Tx(k, v), key key: k) -> option.Option(v) {
+pub fn get(tx tx: Tx(k, v), key key: k) -> Result(v, Nil) {
   let assert Ok(result) =
     btree.lookup(
       tree: tx.tree,
@@ -97,7 +97,7 @@ pub fn get(tx tx: Tx(k, v), key key: k) -> option.Option(v) {
       value_codec: tx.value_codec,
       compare: tx.key_compare,
     )
-  result
+  option.to_result(result, Nil)
 }
 
 /// Write a key-value pair within the transaction. Returns the updated `Tx`.
@@ -133,7 +133,7 @@ pub fn get_in(
   tx tx: Tx(k, v),
   name name: String,
   key_bytes key_bytes: BitArray,
-) -> option.Option(BitArray) {
+) -> Result(BitArray, Nil) {
   let assert Ok(entry) = dict.get(tx.other_trees, name)
   let assert Ok(result) =
     btree.lookup(
@@ -144,7 +144,7 @@ pub fn get_in(
       value_codec: codec.bit_array(),
       compare: entry.byte_compare,
     )
-  result
+  option.to_result(result, Nil)
 }
 
 /// Insert or update a key-value pair in a named keyspace within the

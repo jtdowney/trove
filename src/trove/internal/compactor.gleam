@@ -41,7 +41,7 @@ pub fn compact(
   key_compare key_compare: fn(k, k) -> order.Order,
 ) -> Result(
   #(btree.Btree(k, v), List(CompactedKeyspace), store.Store),
-  btree.BtreeError,
+  btree.Error,
 ) {
   use new_store <- result.try(
     store.open(path: new_store_path) |> result.map_error(btree.StoreError),
@@ -79,7 +79,7 @@ fn rewrite_all(
   key_compare: fn(k, k) -> order.Order,
 ) -> Result(
   #(btree.Btree(k, v), List(CompactedKeyspace), store.Store),
-  btree.BtreeError,
+  btree.Error,
 ) {
   let default_entries =
     btree_range.query(
@@ -125,7 +125,7 @@ fn rewrite_keyspace(
   old_store: store.Store,
   new_store: store.Store,
   capacity: Int,
-) -> Result(CompactedKeyspace, btree.BtreeError) {
+) -> Result(CompactedKeyspace, btree.Error) {
   let bytes_codec = codec.bit_array()
   let entries =
     btree_range.query(

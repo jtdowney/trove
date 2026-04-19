@@ -46,7 +46,7 @@ pub fn insert(
   store store: store.Store,
   key key: Int,
   value value: String,
-) -> Result(btree.Btree(Int, String), btree.BtreeError) {
+) -> Result(btree.Btree(Int, String), btree.Error) {
   btree.insert(
     tree: tree,
     store: store,
@@ -74,7 +74,7 @@ pub fn lookup(
   tree tree: btree.Btree(Int, String),
   store store: store.Store,
   key key: Int,
-) -> Result(option.Option(String), btree.BtreeError) {
+) -> Result(option.Option(String), btree.Error) {
   btree.lookup(
     tree: tree,
     store: store,
@@ -89,7 +89,7 @@ pub fn delete(
   tree tree: btree.Btree(Int, String),
   store store: store.Store,
   key key: Int,
-) -> Result(btree.Btree(Int, String), btree.BtreeError) {
+) -> Result(btree.Btree(Int, String), btree.Error) {
   btree.delete(
     tree: tree,
     store: store,
@@ -114,7 +114,7 @@ pub fn mark_deleted(
   tree tree: btree.Btree(Int, String),
   store store: store.Store,
   key key: Int,
-) -> Result(btree.Btree(Int, String), btree.BtreeError) {
+) -> Result(btree.Btree(Int, String), btree.Error) {
   btree.mark_deleted(
     tree: tree,
     store: store,
@@ -147,7 +147,7 @@ pub fn compute_diff(
   old old: btree.Btree(Int, String),
   new new: btree.Btree(Int, String),
   store store: store.Store,
-) -> yielder.Yielder(#(Int, diff.DiffEntry(String))) {
+) -> yielder.Yielder(#(Int, diff.Entry(String))) {
   diff.diff(
     old: old,
     new: new,

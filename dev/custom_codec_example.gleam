@@ -2,6 +2,7 @@ import gleam/bit_array
 import gleam/int
 import gleam/io
 import gleam/option
+import gleam/result
 import gleam/string
 import trove
 import trove/codec
@@ -21,17 +22,16 @@ fn user_codec() -> codec.Codec(User) {
     decode: fn(bits) {
       case bits {
         <<name_size:32, name_bytes:bytes-size(name_size), age:32>> ->
-          case bit_array.to_string(name_bytes) {
-            Ok(name) -> Ok(User(name, age))
-            Error(_) -> Error(Nil)
-          }
+          bit_array.to_string(name_bytes)
+          |> result.map(fn(name) { User(name, age) })
+          |> result.replace_error(Nil)
         _ -> Error(Nil)
       }
     },
   )
 }
 
-pub fn main() {
+pub fn main() -> Nil {
   let config =
     trove.Config(
       path: "/tmp/trove_custom_codec_example",

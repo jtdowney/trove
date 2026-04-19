@@ -48,6 +48,21 @@ pub fn query(
   }
 }
 
+fn fetch_or_panic(store: store.Store, location: Int, label: String) -> BitArray {
+  case store.get_node(store: store, location: location) {
+    Ok(d) -> d
+    Error(reason) ->
+      panic as {
+        "range query: "
+        <> label
+        <> " read failed at offset "
+        <> int.to_string(location)
+        <> ": "
+        <> store.error_to_string(reason)
+      }
+  }
+}
+
 fn traverse_node(
   store: store.Store,
   location: Int,
@@ -58,16 +73,7 @@ fn traverse_node(
   max: option.Option(range.Bound(k)),
   direction: range.Direction,
 ) -> yielder.Yielder(#(k, v)) {
-  let data = case store.get_node(store: store, location: location) {
-    Ok(d) -> d
-    Error(reason) ->
-      panic as {
-        "range query: store read failed at offset "
-        <> int.to_string(location)
-        <> ": "
-        <> store.error_to_string(reason)
-      }
-  }
+  let data = fetch_or_panic(store, location, "tree node")
   case node.decode_tree_node(data: data, key_codec: key_codec) {
     Ok(node.Leaf(children)) ->
       traverse_leaf(store, children, value_codec, compare, min, max, direction)
@@ -104,16 +110,7 @@ fn traverse_leaf(
   |> yielder.filter(fn(entry) { in_range(entry.0, min, max, compare) })
   |> yielder.filter_map(fn(entry) {
     let #(key, data_loc) = entry
-    let data = case store.get_node(store: store, location: data_loc) {
-      Ok(d) -> d
-      Error(reason) ->
-        panic as {
-          "range query: data read failed at offset "
-          <> int.to_string(data_loc)
-          <> ": "
-          <> store.error_to_string(reason)
-        }
-    }
+    let data = fetch_or_panic(store, data_loc, "data node")
     case node.decode_data_node(data: data, value_codec: value_codec) {
       Ok(node.Value(value)) -> Ok(#(key, value))
       Ok(node.Deleted) -> Error(Nil)
@@ -252,6 +249,7 @@ fn bounds_are_empty(
         _, _ -> compare(lo, hi) != order.Lt
       }
     }
-    _, _ -> False
+    option.None, _ -> False
+    _, option.None -> False
   }
 }

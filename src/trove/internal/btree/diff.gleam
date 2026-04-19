@@ -11,7 +11,7 @@ import trove/internal/store
 import trove/range
 
 /// A single entry in a tree diff.
-pub type DiffEntry(v) {
+pub type Entry(v) {
   /// The key was inserted or its value changed.
   Upserted(v)
   /// The key was removed.
@@ -27,7 +27,7 @@ pub fn diff(
   key_codec key_codec: codec.Codec(k),
   value_codec value_codec: codec.Codec(v),
   compare compare: fn(k, k) -> order.Order,
-) -> yielder.Yielder(#(k, DiffEntry(v))) {
+) -> yielder.Yielder(#(k, Entry(v))) {
   use <- bool.guard(
     when: btree.root(tree: old) == btree.root(tree: new),
     return: yielder.empty(),
@@ -63,7 +63,7 @@ fn lazy_merge_diff(
   old: yielder.Yielder(#(k, v)),
   new: yielder.Yielder(#(k, v)),
   compare: fn(k, k) -> order.Order,
-) -> yielder.Yielder(#(k, DiffEntry(v))) {
+) -> yielder.Yielder(#(k, Entry(v))) {
   yielder.unfold(from: #(yielder.step(old), yielder.step(new)), with: fn(state) {
     let #(old_step, new_step) = state
     do_merge_step(old_step, new_step, compare)
@@ -75,7 +75,7 @@ fn do_merge_step(
   new_step: yielder.Step(#(k, v), yielder.Yielder(#(k, v))),
   compare: fn(k, k) -> order.Order,
 ) -> yielder.Step(
-  #(k, DiffEntry(v)),
+  #(k, Entry(v)),
   #(
     yielder.Step(#(k, v), yielder.Yielder(#(k, v))),
     yielder.Step(#(k, v), yielder.Yielder(#(k, v))),

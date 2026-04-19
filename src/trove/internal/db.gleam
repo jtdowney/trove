@@ -20,11 +20,11 @@ import trove/internal/store
 import trove/internal/store/file_ffi
 import trove/internal/tx
 
-pub type InternalOpenError {
-  InternalDirectoryError(String)
-  InternalStoreError(String)
-  InternalLockError(String)
-  InternalActorStartError
+pub type OpenError {
+  DirectoryError(String)
+  StoreError(String)
+  LockError(String)
+  ActorStartError
 }
 
 pub type FileSync {
@@ -46,7 +46,7 @@ pub type TransactionOutcome(k, v) {
 }
 
 pub type Message(k, v) {
-  Get(key: k, reply: process.Subject(option.Option(v)))
+  Get(key: k, reply: process.Subject(Result(v, Nil)))
   Put(key: k, value: v, reply: process.Subject(Nil))
   Delete(key: k, reply: process.Subject(Nil))
   HasKey(key: k, reply: process.Subject(Bool))
@@ -84,7 +84,7 @@ pub type Message(k, v) {
   GetIn(
     name: String,
     key_bytes: BitArray,
-    reply: process.Subject(option.Option(BitArray)),
+    reply: process.Subject(Result(BitArray, Nil)),
   )
   DeleteIn(name: String, key_bytes: BitArray, reply: process.Subject(Nil))
   HasKeyIn(name: String, key_bytes: BitArray, reply: process.Subject(Bool))
@@ -105,8 +105,8 @@ pub type KeyspaceState {
   )
 }
 
-type DbState(k, v) {
-  DbState(
+type State(k, v) {
+  State(
     tree: btree.Btree(k, v),
     store: store.Store,
     key_codec: codec.Codec(k),
@@ -142,7 +142,7 @@ fn parse_trv_number(name: String) -> Result(Int, Nil) {
   name |> string.drop_end(4) |> int.parse
 }
 
-fn aggregate_counts(state: DbState(k, v)) -> #(Int, Int) {
+fn aggregate_counts(state: State(k, v)) -> #(Int, Int) {
   let default_size = btree.size(state.tree)
   let default_dirt = btree.dirt(state.tree)
   dict.fold(state.keyspaces, #(default_size, default_dirt), fn(acc, _, entry) {
@@ -150,12 +150,12 @@ fn aggregate_counts(state: DbState(k, v)) -> #(Int, Int) {
   })
 }
 
-fn compute_dirt_factor(state: DbState(k, v)) -> Float {
+fn compute_dirt_factor(state: State(k, v)) -> Float {
   let #(total_size, total_dirt) = aggregate_counts(state)
   int.to_float(total_dirt) /. int.to_float(1 + total_size + total_dirt)
 }
 
-fn do_compact(state: DbState(k, v)) -> Result(DbState(k, v), btree.BtreeError) {
+fn do_compact(state: State(k, v)) -> Result(State(k, v), btree.Error) {
   let new_file_number = state.current_file_number + 1
   let new_path = store_path(state.db_path, new_file_number)
   let old_path = store_path(state.db_path, state.current_file_number)
@@ -202,7 +202,7 @@ fn do_compact(state: DbState(k, v)) -> Result(DbState(k, v), btree.BtreeError) {
   cleanup_old_store_files(state.db_path, new_file_number)
   let _ = file_ffi.dir_fsync(path: state.db_path)
   Ok(
-    DbState(
+    State(
       ..state,
       tree: new_tree,
       store: new_store,
@@ -257,7 +257,7 @@ fn cleanup_old_store_files(path: String, current_file_number: Int) -> Nil {
   }
 }
 
-fn maybe_auto_compact(state: DbState(k, v)) -> DbState(k, v) {
+fn maybe_auto_compact(state: State(k, v)) -> State(k, v) {
   case state.auto_compact {
     NoAutoCompact -> state
     AutoCompact(min_dirt, min_dirt_factor) -> {
@@ -281,7 +281,7 @@ fn maybe_auto_compact(state: DbState(k, v)) -> DbState(k, v) {
 fn fold_inserts(
   tree: btree.Btree(k, v),
   entries: List(#(k, v)),
-  state: DbState(k, v),
+  state: State(k, v),
 ) -> btree.Btree(k, v) {
   list.fold(entries, tree, fn(tree, entry) {
     let assert Ok(t) =
@@ -301,7 +301,7 @@ fn fold_inserts(
 fn fold_deletes(
   tree: btree.Btree(k, v),
   keys: List(k),
-  state: DbState(k, v),
+  state: State(k, v),
 ) -> btree.Btree(k, v) {
   list.fold(keys, tree, fn(tree, key) {
     let assert Ok(t) =
@@ -317,10 +317,10 @@ fn fold_deletes(
 }
 
 fn commit_tree(
-  state: DbState(k, v),
+  state: State(k, v),
   new_tree: btree.Btree(k, v),
   reply: process.Subject(Nil),
-) -> actor.Next(DbState(k, v), Message(k, v)) {
+) -> actor.Next(State(k, v), Message(k, v)) {
   case
     btree.root(tree: state.tree) == btree.root(tree: new_tree)
     && btree.size(tree: state.tree) == btree.size(tree: new_tree)
@@ -338,7 +338,7 @@ fn commit_tree(
           state.auto_file_sync,
         )
       actor.send(reply, Nil)
-      actor.continue(maybe_auto_compact(DbState(..state, tree: new_tree)))
+      actor.continue(maybe_auto_compact(State(..state, tree: new_tree)))
     }
   }
 }
@@ -352,11 +352,11 @@ fn tx_keyspaces(
 }
 
 fn commit_transaction(
-  state: DbState(k, v),
+  state: State(k, v),
   new_tree: btree.Btree(k, v),
   new_other: dict.Dict(String, tx.KeyspaceEntry),
   reply: process.Subject(Nil),
-) -> actor.Next(DbState(k, v), Message(k, v)) {
+) -> actor.Next(State(k, v), Message(k, v)) {
   let new_keyspaces = merge_tx_keyspaces(state.keyspaces, new_other)
   case
     btree.root(tree: state.tree) == btree.root(tree: new_tree)
@@ -372,7 +372,7 @@ fn commit_transaction(
         write_header(state.store, new_tree, new_keyspaces, state.auto_file_sync)
       actor.send(reply, Nil)
       actor.continue(maybe_auto_compact(
-        DbState(..state, tree: new_tree, keyspaces: new_keyspaces),
+        State(..state, tree: new_tree, keyspaces: new_keyspaces),
       ))
     }
   }
@@ -395,8 +395,14 @@ fn keyspaces_equal(
   a: dict.Dict(String, KeyspaceState),
   b: dict.Dict(String, KeyspaceState),
 ) -> Bool {
-  dict.size(a) == dict.size(b)
-  && dict.to_list(a)
+  dict.size(a) == dict.size(b) && all_keyspaces_match(a, b)
+}
+
+fn all_keyspaces_match(
+  a: dict.Dict(String, KeyspaceState),
+  b: dict.Dict(String, KeyspaceState),
+) -> Bool {
+  dict.to_list(a)
   |> list.all(fn(pair) { keyspace_trees_match(pair.0, pair.1, b) })
 }
 
@@ -414,12 +420,12 @@ fn keyspace_trees_match(
 }
 
 fn commit_keyspace_write(
-  state: DbState(k, v),
+  state: State(k, v),
   name: String,
   old_entry: KeyspaceState,
   new_entry: KeyspaceState,
   reply: process.Subject(Nil),
-) -> actor.Next(DbState(k, v), Message(k, v)) {
+) -> actor.Next(State(k, v), Message(k, v)) {
   case
     btree.root(tree: old_entry.tree) == btree.root(tree: new_entry.tree)
     && btree.size(tree: old_entry.tree) == btree.size(tree: new_entry.tree)
@@ -439,16 +445,16 @@ fn commit_keyspace_write(
         )
       actor.send(reply, Nil)
       actor.continue(maybe_auto_compact(
-        DbState(..state, keyspaces: new_keyspaces),
+        State(..state, keyspaces: new_keyspaces),
       ))
     }
   }
 }
 
 fn handle_message(
-  state: DbState(k, v),
+  state: State(k, v),
   msg: Message(k, v),
-) -> actor.Next(DbState(k, v), Message(k, v)) {
+) -> actor.Next(State(k, v), Message(k, v)) {
   case msg {
     Get(key, reply) -> {
       let assert Ok(result) =
@@ -460,7 +466,7 @@ fn handle_message(
           value_codec: state.value_codec,
           compare: state.key_compare,
         )
-      actor.send(reply, result)
+      actor.send(reply, option.to_result(result, Nil))
       actor.continue(state)
     }
 
@@ -551,7 +557,7 @@ fn handle_message(
                   state.keyspaces,
                   state.auto_file_sync,
                 )
-              let new_state = DbState(..state, tree: new_tree)
+              let new_state = State(..state, tree: new_tree)
               actor.send(reply, Nil)
               actor.continue(maybe_auto_compact(new_state))
             }
@@ -613,7 +619,7 @@ fn handle_message(
 
     SetAutoCompact(setting, reply) -> {
       actor.send(reply, Nil)
-      actor.continue(DbState(..state, auto_compact: setting))
+      actor.continue(State(..state, auto_compact: setting))
     }
 
     RegisterKeyspace(name, byte_compare, reply) -> {
@@ -627,7 +633,7 @@ fn handle_message(
         KeyspaceState(tree: existing.tree, byte_compare: byte_compare)
       let new_keyspaces = dict.insert(state.keyspaces, name, new_entry)
       actor.send(reply, Nil)
-      actor.continue(DbState(..state, keyspaces: new_keyspaces))
+      actor.continue(State(..state, keyspaces: new_keyspaces))
     }
 
     ListKeyspaces(reply) -> {
@@ -663,7 +669,7 @@ fn handle_message(
           value_codec: codec.bit_array(),
           compare: entry.byte_compare,
         )
-      actor.send(reply, result)
+      actor.send(reply, option.to_result(result, Nil))
       actor.continue(state)
     }
 
@@ -747,7 +753,7 @@ fn write_header(
   tree: btree.Btree(k, v),
   keyspaces: dict.Dict(String, KeyspaceState),
   auto_sync: FileSync,
-) -> Result(Nil, store.StoreError) {
+) -> Result(Nil, store.Error) {
   let header =
     store.Header(
       root: btree.root(tree),
@@ -788,10 +794,7 @@ fn keyspace_headers(
 
 fn recover_state(
   store: store.Store,
-) -> Result(
-  #(btree.Btree(k, v), dict.Dict(String, KeyspaceState)),
-  btree.BtreeError,
-) {
+) -> Result(#(btree.Btree(k, v), dict.Dict(String, KeyspaceState)), btree.Error) {
   use is_blank <- result.try(
     store.blank(store: store) |> result.map_error(btree.StoreError),
   )
@@ -816,7 +819,7 @@ fn recover_state(
 
 fn recover_keyspaces(
   entries: List(store.KeyspaceHeader),
-) -> Result(dict.Dict(String, KeyspaceState), btree.BtreeError) {
+) -> Result(dict.Dict(String, KeyspaceState), btree.Error) {
   list.try_fold(entries, dict.new(), fn(acc, entry) {
     use tree <- result.try(btree.from_header(
       root: entry.root,
@@ -840,10 +843,10 @@ pub fn open(
   auto_file_sync auto_file_sync: FileSync,
   auto_compact auto_compact: AutoCompact,
   call_timeout call_timeout: Int,
-) -> Result(process.Subject(Message(k, v)), InternalOpenError) {
+) -> Result(process.Subject(Message(k, v)), OpenError) {
   use _ <- result.try(
     file_ffi.mkdir_p(path: path)
-    |> result.map_error(InternalDirectoryError),
+    |> result.map_error(DirectoryError),
   )
 
   let start_result =
@@ -884,7 +887,7 @@ pub fn open(
         }),
       )
       let state =
-        DbState(
+        State(
           tree: tree,
           store: store,
           key_codec: key_codec,
@@ -910,15 +913,12 @@ pub fn open(
       case string.starts_with(reason, init_lock_prefix) {
         True ->
           Error(
-            InternalLockError(string.drop_start(
-              reason,
-              string.length(init_lock_prefix),
-            )),
+            LockError(string.drop_start(reason, string.length(init_lock_prefix))),
           )
-        False -> Error(InternalStoreError(reason))
+        False -> Error(StoreError(reason))
       }
     Error(actor.InitTimeout) | Error(actor.InitExited(_)) ->
-      Error(InternalActorStartError)
+      Error(ActorStartError)
   }
 }
 
@@ -1072,7 +1072,7 @@ pub fn get(
   subject subject: process.Subject(Message(k, v)),
   key key: k,
   timeout timeout: Int,
-) -> option.Option(v) {
+) -> Result(v, Nil) {
   actor.call(subject, waiting: timeout, sending: Get(key, _))
 }
 
@@ -1221,7 +1221,7 @@ pub fn get_in(
   name name: String,
   key_bytes key_bytes: BitArray,
   timeout timeout: Int,
-) -> option.Option(BitArray) {
+) -> Result(BitArray, Nil) {
   actor.call(subject, waiting: timeout, sending: GetIn(name, key_bytes, _))
 }
 

@@ -7,7 +7,7 @@ import gleam/option
 import gleam/result
 import trove/internal/store/file_ffi
 
-pub type StoreError {
+pub type Error {
   IoError(detail: String)
   ChecksumMismatch
   InvalidNodeHeader
@@ -15,7 +15,7 @@ pub type StoreError {
   NoHeaderFound
 }
 
-pub fn error_to_string(error: StoreError) -> String {
+pub fn error_to_string(error: Error) -> String {
   case error {
     IoError(detail) -> "I/O error: " <> detail
     ChecksumMismatch -> "checksum mismatch"
@@ -41,7 +41,7 @@ const header_length_prefix_size = 4
 
 const max_keyspaces = 65_535
 
-fn map_io(result: Result(a, String)) -> Result(a, StoreError) {
+fn map_io(result: Result(a, String)) -> Result(a, Error) {
   result.map_error(result, fn(s) { IoError(detail: s) })
 }
 
@@ -74,31 +74,28 @@ pub fn encoded_size(header header: Header) -> Int {
 }
 
 /// Open a store file for reading and writing. Creates the file if needed.
-pub fn open(path path: String) -> Result(Store, StoreError) {
+pub fn open(path path: String) -> Result(Store, Error) {
   file_ffi.open(path: path)
   |> result.map(Store(_, path))
   |> map_io
 }
 
 /// Open a read-only handle to the same store file, suitable for snapshots.
-pub fn open_reader(store store: Store) -> Result(Store, StoreError) {
+pub fn open_reader(store store: Store) -> Result(Store, Error) {
   file_ffi.open_read(path: store.path)
   |> result.map(Store(_, store.path))
   |> map_io
 }
 
 /// Close the store, releasing the file handle.
-pub fn close(store store: Store) -> Result(Nil, StoreError) {
+pub fn close(store store: Store) -> Result(Nil, Error) {
   file_ffi.close(handle: store.handle)
   |> map_io
 }
 
 /// Append a serialized node to the store. Returns the byte offset where the
 /// node was written.
-pub fn put_node(
-  store store: Store,
-  data data: BitArray,
-) -> Result(Int, StoreError) {
+pub fn put_node(store store: Store, data data: BitArray) -> Result(Int, Error) {
   let size = bit_array.byte_size(data)
   let checksum = file_ffi.hash(data: data)
   let payload = <<data_marker:8, size:32, data:bits, checksum:bits>>
@@ -110,7 +107,7 @@ pub fn put_node(
 pub fn get_node(
   store store: Store,
   location location: Int,
-) -> Result(BitArray, StoreError) {
+) -> Result(BitArray, Error) {
   use prefix <- result.try(
     file_ffi.pread(handle: store.handle, offset: location, length: 5)
     |> map_io,
@@ -158,7 +155,7 @@ pub fn get_node(
 pub fn put_header(
   store store: Store,
   header header: Header,
-) -> Result(Int, StoreError) {
+) -> Result(Int, Error) {
   let assert True = list.length(header.keyspaces) <= max_keyspaces
   use current_size <- result.try(
     file_ffi.file_size(handle: store.handle) |> map_io,
@@ -220,7 +217,7 @@ fn keyspace_bytes(ks: KeyspaceHeader) -> BitArray {
 fn pad_to_block_boundary(
   handle: file_ffi.FileHandle,
   current_size: Int,
-) -> Result(Int, StoreError) {
+) -> Result(Int, Error) {
   let remainder = current_size % block_size
   case remainder {
     0 -> Ok(0)
@@ -237,7 +234,7 @@ fn pad_to_block_boundary(
 /// last block. Supports both the v2 (`0x2B`) format and the legacy v1
 /// (`0x2A`) format; legacy headers decode to a `Header` with an empty
 /// keyspace list.
-pub fn get_latest_header(store store: Store) -> Result(Header, StoreError) {
+pub fn get_latest_header(store store: Store) -> Result(Header, Error) {
   use file_size <- result.try(
     file_ffi.file_size(handle: store.handle) |> map_io,
   )
@@ -250,7 +247,7 @@ pub fn get_latest_header(store store: Store) -> Result(Header, StoreError) {
   }
 }
 
-fn scan_for_header(store: Store, offset: Int) -> Result(Header, StoreError) {
+fn scan_for_header(store: Store, offset: Int) -> Result(Header, Error) {
   use <- bool.guard(when: offset < 0, return: Error(NoHeaderFound))
   case try_parse_header(store, offset) {
     Ok(header) -> Ok(header)
@@ -427,19 +424,19 @@ fn parse_legacy_header(store: Store, offset: Int) -> Result(Header, Nil) {
 }
 
 /// Flush all buffered data to stable storage.
-pub fn sync(store store: Store) -> Result(Nil, StoreError) {
+pub fn sync(store store: Store) -> Result(Nil, Error) {
   file_ffi.datasync(handle: store.handle)
   |> map_io
 }
 
 /// Return the current byte offset (file size) of the store.
-pub fn current_offset(store store: Store) -> Result(Int, StoreError) {
+pub fn current_offset(store store: Store) -> Result(Int, Error) {
   file_ffi.file_size(handle: store.handle)
   |> map_io
 }
 
 /// Return `True` if the store file is empty (zero bytes).
-pub fn blank(store store: Store) -> Result(Bool, StoreError) {
+pub fn blank(store store: Store) -> Result(Bool, Error) {
   file_ffi.file_size(handle: store.handle)
   |> result.map(fn(size) { size == 0 })
   |> map_io

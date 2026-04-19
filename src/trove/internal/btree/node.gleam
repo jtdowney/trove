@@ -34,12 +34,12 @@ pub type AnyNode(k, v) {
   Data(DataNode(v))
 }
 
-pub type NodeKind {
+pub type Kind {
   TreeKind
   DataKind
 }
 
-pub fn node_kind(data data: BitArray) -> Result(NodeKind, Nil) {
+pub fn node_kind(data data: BitArray) -> Result(Kind, Nil) {
   case data {
     <<0x01, _:bits>> | <<0x02, _:bits>> -> Ok(TreeKind)
     <<0x03, _:bits>> | <<0x04, _:bits>> -> Ok(DataKind)

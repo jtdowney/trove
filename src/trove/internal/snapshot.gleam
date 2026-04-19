@@ -60,7 +60,7 @@ pub fn close(snapshot snapshot: Snapshot(k, v)) -> Nil {
 }
 
 /// Look up a key in the snapshot.
-pub fn get(snapshot snapshot: Snapshot(k, v), key key: k) -> option.Option(v) {
+pub fn get(snapshot snapshot: Snapshot(k, v), key key: k) -> Result(v, Nil) {
   let assert Ok(result) =
     btree.lookup(
       tree: snapshot.tree,
@@ -70,7 +70,7 @@ pub fn get(snapshot snapshot: Snapshot(k, v), key key: k) -> option.Option(v) {
       value_codec: snapshot.value_codec,
       compare: snapshot.key_compare,
     )
-  result
+  option.to_result(result, Nil)
 }
 
 /// Iterate over entries in the snapshot within optional key bounds.
@@ -97,7 +97,7 @@ pub fn get_in(
   snapshot snapshot: Snapshot(k, v),
   name name: String,
   key_bytes key_bytes: BitArray,
-) -> option.Option(BitArray) {
+) -> Result(BitArray, Nil) {
   let assert Ok(view) = dict.get(snapshot.keyspaces, name)
   let assert Ok(result) =
     btree.lookup(
@@ -108,7 +108,7 @@ pub fn get_in(
       value_codec: codec.bit_array(),
       compare: view.byte_compare,
     )
-  result
+  option.to_result(result, Nil)
 }
 
 /// Iterate over entries in a named keyspace within optional byte bounds.

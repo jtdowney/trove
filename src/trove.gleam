@@ -249,17 +249,13 @@ pub fn get_in(
   keyspace keyspace: Keyspace(k, v),
   key key: k,
 ) -> Result(v, Nil) {
-  case
-    db.get_in(
-      subject: db.subject,
-      name: keyspace.name,
-      key_bytes: keyspace.key_codec.encode(key),
-      timeout: db.call_timeout,
-    )
-  {
-    option.Some(value_bytes) -> keyspace.value_codec.decode(value_bytes)
-    option.None -> Error(Nil)
-  }
+  use value_bytes <- result.try(db.get_in(
+    subject: db.subject,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+    timeout: db.call_timeout,
+  ))
+  keyspace.value_codec.decode(value_bytes)
 }
 
 /// Remove a key from a named keyspace. No error if the key does not exist.
@@ -510,7 +506,6 @@ pub fn set_auto_compact(db: Db(k, v), setting setting: AutoCompact) -> Nil {
 /// ```
 pub fn get(db: Db(k, v), key key: k) -> Result(v, Nil) {
   db.get(subject: db.subject, key: key, timeout: db.call_timeout)
-  |> option.to_result(Nil)
 }
 
 /// Insert or update a key-value pair.
@@ -740,7 +735,6 @@ fn drain_latest_loop(
 /// ```
 pub fn tx_get(tx tx: Tx(k, v), key key: k) -> Result(v, Nil) {
   tx.get(tx: tx, key: key)
-  |> option.to_result(Nil)
 }
 
 /// Write a key-value pair within a transaction. Returns the updated `Tx`.
@@ -793,16 +787,12 @@ pub fn tx_get_in(
   keyspace keyspace: Keyspace(k, v),
   key key: k,
 ) -> Result(v, Nil) {
-  case
-    tx.get_in(
-      tx: tx,
-      name: keyspace.name,
-      key_bytes: keyspace.key_codec.encode(key),
-    )
-  {
-    option.Some(value_bytes) -> keyspace.value_codec.decode(value_bytes)
-    option.None -> Error(Nil)
-  }
+  use value_bytes <- result.try(tx.get_in(
+    tx: tx,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+  ))
+  keyspace.value_codec.decode(value_bytes)
 }
 
 /// Insert or update a key-value pair in a named keyspace within a
@@ -886,7 +876,6 @@ pub fn snapshot_get(
   key key: k,
 ) -> Result(v, Nil) {
   snapshot.get(snapshot: snapshot, key: key)
-  |> option.to_result(Nil)
 }
 
 /// Iterate over entries in a snapshot within optional key bounds.
@@ -978,16 +967,12 @@ pub fn snapshot_get_in(
   keyspace keyspace: Keyspace(k, v),
   key key: k,
 ) -> Result(v, Nil) {
-  case
-    snapshot.get_in(
-      snapshot: snapshot,
-      name: keyspace.name,
-      key_bytes: keyspace.key_codec.encode(key),
-    )
-  {
-    option.Some(value_bytes) -> keyspace.value_codec.decode(value_bytes)
-    option.None -> Error(Nil)
-  }
+  use value_bytes <- result.try(snapshot.get_in(
+    snapshot: snapshot,
+    name: keyspace.name,
+    key_bytes: keyspace.key_codec.encode(key),
+  ))
+  keyspace.value_codec.decode(value_bytes)
 }
 
 /// Iterate over entries in a named keyspace within a snapshot. Returns a
@@ -1074,12 +1059,12 @@ pub fn range_in(
   |> yielder.to_list
 }
 
-fn map_open_error(error: db.InternalOpenError) -> OpenError {
+fn map_open_error(error: db.OpenError) -> OpenError {
   case error {
-    db.InternalDirectoryError(reason) -> DirectoryError(reason)
-    db.InternalStoreError(reason) -> StoreError(reason)
-    db.InternalLockError(reason) -> LockError(reason)
-    db.InternalActorStartError -> ActorStartError
+    db.DirectoryError(reason) -> DirectoryError(reason)
+    db.StoreError(reason) -> StoreError(reason)
+    db.LockError(reason) -> LockError(reason)
+    db.ActorStartError -> ActorStartError
   }
 }
 

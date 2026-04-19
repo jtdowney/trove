@@ -4,7 +4,7 @@ import gleam/string
 import trove
 import trove/codec
 
-pub fn main() {
+pub fn main() -> Nil {
   let config =
     trove.Config(
       path: "/tmp/trove_basic_example",

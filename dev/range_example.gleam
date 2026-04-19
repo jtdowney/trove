@@ -1,12 +1,13 @@
 import gleam/int
 import gleam/io
+import gleam/list
 import gleam/option
 import gleam/yielder
 import trove
 import trove/codec
 import trove/range
 
-pub fn main() {
+pub fn main() -> Nil {
   let config =
     trove.Config(
       path: "/tmp/trove_range_example",
@@ -22,8 +23,8 @@ pub fn main() {
 
   trove.put_multi(
     db,
-    entries: list_range(1, 20)
-      |> list_map(fn(i) { #(i, "item_" <> int.to_string(i)) }),
+    entries: int.range(from: 20, to: 0, with: [], run: list.prepend)
+      |> list.map(fn(i) { #(i, "item_" <> int.to_string(i)) }),
   )
 
   io.println("=== All entries (forward) ===")
@@ -77,34 +78,5 @@ fn print_entries(entries: List(#(Int, String))) -> Nil {
       io.println("  " <> int.to_string(key) <> " -> " <> value)
       print_entries(rest)
     }
-  }
-}
-
-fn list_range(from: Int, to: Int) -> List(Int) {
-  do_list_range(from, to, [])
-}
-
-fn do_list_range(current: Int, to: Int, acc: List(Int)) -> List(Int) {
-  case current > to {
-    True -> list_reverse(acc)
-    False -> do_list_range(current + 1, to, [current, ..acc])
-  }
-}
-
-fn list_reverse(items: List(a)) -> List(a) {
-  do_list_reverse(items, [])
-}
-
-fn do_list_reverse(items: List(a), acc: List(a)) -> List(a) {
-  case items {
-    [] -> acc
-    [first, ..rest] -> do_list_reverse(rest, [first, ..acc])
-  }
-}
-
-fn list_map(items: List(a), f: fn(a) -> b) -> List(b) {
-  case items {
-    [] -> []
-    [first, ..rest] -> [f(first), ..list_map(rest, f)]
   }
 }

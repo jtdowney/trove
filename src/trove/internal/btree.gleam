@@ -13,13 +13,13 @@ import trove/codec
 import trove/internal/btree/node
 import trove/internal/store
 
-pub type BtreeError {
-  StoreError(store.StoreError)
+pub type Error {
+  StoreError(store.Error)
   DecodeError(detail: String)
   ValidationError(detail: String)
 }
 
-pub fn error_to_string(error: BtreeError) -> String {
+pub fn error_to_string(error: Error) -> String {
   case error {
     StoreError(e) -> store.error_to_string(e)
     DecodeError(detail) -> "decode error: " <> detail
@@ -27,12 +27,12 @@ pub fn error_to_string(error: BtreeError) -> String {
   }
 }
 
-fn read_node(store: store.Store, location: Int) -> Result(BitArray, BtreeError) {
+fn read_node(store: store.Store, location: Int) -> Result(BitArray, Error) {
   store.get_node(store: store, location: location)
   |> result.map_error(StoreError)
 }
 
-fn write_node(store: store.Store, data: BitArray) -> Result(Int, BtreeError) {
+fn write_node(store: store.Store, data: BitArray) -> Result(Int, Error) {
   store.put_node(store: store, data: data)
   |> result.map_error(StoreError)
 }
@@ -85,7 +85,7 @@ pub fn from_header(
   size size: Int,
   dirt dirt: Int,
   capacity capacity: Int,
-) -> Result(Btree(k, v), BtreeError) {
+) -> Result(Btree(k, v), Error) {
   use <- bool.guard(
     when: capacity < 2,
     return: Error(ValidationError("capacity must be at least 2")),
@@ -148,7 +148,7 @@ pub fn lookup(
   key_codec key_codec: codec.Codec(k),
   value_codec value_codec: codec.Codec(v),
   compare compare: fn(k, k) -> order.Order,
-) -> Result(option.Option(v), BtreeError) {
+) -> Result(option.Option(v), Error) {
   case tree {
     Empty(..) -> Ok(option.None)
     NonEmpty(root: location, ..) ->
@@ -164,7 +164,7 @@ pub fn contains(
   key key: k,
   key_codec key_codec: codec.Codec(k),
   compare compare: fn(k, k) -> order.Order,
-) -> Result(Bool, BtreeError) {
+) -> Result(Bool, Error) {
   case tree {
     Empty(..) -> Ok(False)
     NonEmpty(root: location, ..) ->
@@ -178,7 +178,7 @@ fn contains_at(
   key: k,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(Bool, BtreeError) {
+) -> Result(Bool, Error) {
   use data <- result.try(read_node(store, location))
   case node.decode_tree_node(data: data, key_codec: key_codec) {
     Ok(node.Leaf(children)) -> {
@@ -210,7 +210,7 @@ fn lookup_tree_at(
   key_codec: codec.Codec(k),
   value_codec: codec.Codec(v),
   compare: fn(k, k) -> order.Order,
-) -> Result(option.Option(v), BtreeError) {
+) -> Result(option.Option(v), Error) {
   use data <- result.try(read_node(store, location))
   case node.decode_tree_node(data: data, key_codec: key_codec) {
     Ok(node.Leaf(children)) ->
@@ -226,7 +226,7 @@ fn resolve_data(
   store: store.Store,
   location: Int,
   value_codec: codec.Codec(v),
-) -> Result(option.Option(v), BtreeError) {
+) -> Result(option.Option(v), Error) {
   use data <- result.try(read_node(store, location))
   case node.decode_data_node(data: data, value_codec: value_codec) {
     Ok(node.Value(value)) -> Ok(option.Some(value))
@@ -242,7 +242,7 @@ fn lookup_in_leaf(
   key: k,
   value_codec: codec.Codec(v),
   compare: fn(k, k) -> order.Order,
-) -> Result(option.Option(v), BtreeError) {
+) -> Result(option.Option(v), Error) {
   case
     non_empty_list.find(in: children, one_that: fn(entry) {
       compare(entry.0, key) == order.Eq
@@ -260,7 +260,7 @@ fn lookup_in_branch(
   key_codec: codec.Codec(k),
   value_codec: codec.Codec(v),
   compare: fn(k, k) -> order.Order,
-) -> Result(option.Option(v), BtreeError) {
+) -> Result(option.Option(v), Error) {
   let #(_, child_loc) = find_branch_child_index(children, key, compare)
   lookup_tree_at(store, child_loc, key, key_codec, value_codec, compare)
 }
@@ -275,7 +275,7 @@ pub fn insert(
   key_codec key_codec: codec.Codec(k),
   value_codec value_codec: codec.Codec(v),
   compare compare: fn(k, k) -> order.Order,
-) -> Result(Btree(k, v), BtreeError) {
+) -> Result(Btree(k, v), Error) {
   let tree_dirt = dirt(tree)
   let tree_capacity = capacity(tree)
   use value_loc <- result.try(write_data_node(
@@ -347,7 +347,7 @@ fn do_insert(
   capacity: Int,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(InsertResult(k), BtreeError) {
+) -> Result(InsertResult(k), Error) {
   use data <- result.try(read_node(store, location))
   case node.decode_tree_node(data: data, key_codec: key_codec) {
     Error(Nil) ->
@@ -383,7 +383,7 @@ fn insert_into_leaf(
   capacity: Int,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(InsertResult(k), BtreeError) {
+) -> Result(InsertResult(k), Error) {
   let #(new_children, is_new) =
     insert_into_sorted(children, key, value_loc, compare)
   let #(min_key, _) = non_empty_list.first(new_children)
@@ -419,7 +419,7 @@ fn insert_into_branch(
   capacity: Int,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(InsertResult(k), BtreeError) {
+) -> Result(InsertResult(k), Error) {
   let #(child_index, child_loc) =
     find_branch_child_index(children, key, compare)
   use child_result <- result.try(do_insert(
@@ -620,7 +620,7 @@ pub fn load(
   key_codec key_codec: codec.Codec(k),
   value_codec value_codec: codec.Codec(v),
   compare compare: fn(k, k) -> order.Order,
-) -> Result(Btree(k, v), BtreeError) {
+) -> Result(Btree(k, v), Error) {
   use <- bool.guard(
     when: capacity < 2,
     return: Error(ValidationError("capacity must be at least 2")),
@@ -664,7 +664,7 @@ pub fn load_from_yielder(
   key_codec key_codec: codec.Codec(k),
   value_codec value_codec: codec.Codec(v),
   compare compare: fn(k, k) -> order.Order,
-) -> Result(Btree(k, v), BtreeError) {
+) -> Result(Btree(k, v), Error) {
   use <- bool.guard(
     when: capacity < 2,
     return: Error(ValidationError("capacity must be at least 2")),
@@ -750,7 +750,7 @@ fn write_values(
   entries: List(#(k, v)),
   store: store.Store,
   value_codec: codec.Codec(v),
-) -> Result(List(#(k, Int)), BtreeError) {
+) -> Result(List(#(k, Int)), Error) {
   list.try_map(entries, fn(entry) {
     let #(key, value) = entry
     use loc <- result.try(write_data_node(store, node.Value(value), value_codec))
@@ -764,7 +764,7 @@ fn write_level(
   store: store.Store,
   key_codec: codec.Codec(k),
   make_node: fn(non_empty_list.NonEmptyList(#(k, Int))) -> node.TreeNode(k),
-) -> Result(List(#(k, Int)), BtreeError) {
+) -> Result(List(#(k, Int)), Error) {
   let chunks = list.sized_chunk(pairs, capacity)
   write_chunks(chunks, store, key_codec, make_node)
 }
@@ -774,7 +774,7 @@ fn write_chunks(
   store: store.Store,
   key_codec: codec.Codec(k),
   make_node: fn(non_empty_list.NonEmptyList(#(k, Int))) -> node.TreeNode(k),
-) -> Result(List(#(k, Int)), BtreeError) {
+) -> Result(List(#(k, Int)), Error) {
   list.try_map(chunks, flush_chunk(_, store, key_codec, make_node))
 }
 
@@ -783,7 +783,7 @@ fn flush_chunk(
   store: store.Store,
   key_codec: codec.Codec(k),
   make_node: fn(non_empty_list.NonEmptyList(#(k, Int))) -> node.TreeNode(k),
-) -> Result(#(k, Int), BtreeError) {
+) -> Result(#(k, Int), Error) {
   let assert Ok(nel) = non_empty_list.from_list(children)
   let #(first_key, _) = non_empty_list.first(nel)
   use loc <- result.try(write_tree_node(store, make_node(nel), key_codec))
@@ -795,9 +795,8 @@ fn build_branches(
   capacity: Int,
   store: store.Store,
   key_codec: codec.Codec(k),
-) -> Result(Int, BtreeError) {
+) -> Result(Int, Error) {
   case pairs {
-    [] -> Error(ValidationError("build_branches called with empty pairs"))
     [#(_, loc)] -> Ok(loc)
     [_, _, ..] -> {
       use branch_pairs <- result.try(write_level(
@@ -809,6 +808,7 @@ fn build_branches(
       ))
       build_branches(branch_pairs, capacity, store, key_codec)
     }
+    [] -> panic as "build_branches requires non-empty pairs"
   }
 }
 
@@ -816,7 +816,7 @@ fn write_tree_node(
   store: store.Store,
   tree_node: node.TreeNode(k),
   key_codec: codec.Codec(k),
-) -> Result(Int, BtreeError) {
+) -> Result(Int, Error) {
   write_node(
     store,
     node.encode_tree_node(node: tree_node, key_codec: key_codec),
@@ -827,14 +827,14 @@ fn write_data_node(
   store: store.Store,
   data_node: node.DataNode(v),
   value_codec: codec.Codec(v),
-) -> Result(Int, BtreeError) {
+) -> Result(Int, Error) {
   write_node(
     store,
     node.encode_data_node(node: data_node, value_codec: value_codec),
   )
 }
 
-fn write_tombstone(store: store.Store) -> Result(Int, BtreeError) {
+fn write_tombstone(store: store.Store) -> Result(Int, Error) {
   write_node(store, node.encode_tombstone())
 }
 
@@ -845,7 +845,7 @@ pub fn delete(
   key key: k,
   key_codec key_codec: codec.Codec(k),
   compare compare: fn(k, k) -> order.Order,
-) -> Result(Btree(k, v), BtreeError) {
+) -> Result(Btree(k, v), Error) {
   case tree {
     Empty(..) -> Ok(tree)
     NonEmpty(
@@ -882,7 +882,7 @@ fn collapse_root(
   store: store.Store,
   location: Int,
   key_codec: codec.Codec(k),
-) -> Result(Int, BtreeError) {
+) -> Result(Int, Error) {
   use data <- result.try(read_node(store, location))
   case node.decode_tree_node(data: data, key_codec: key_codec) {
     Ok(node.Branch(children)) ->
@@ -907,7 +907,7 @@ fn do_delete(
   key: k,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(DeleteResult(k), BtreeError) {
+) -> Result(DeleteResult(k), Error) {
   use data <- result.try(read_node(store, location))
   case node.decode_tree_node(data: data, key_codec: key_codec) {
     Error(Nil) ->
@@ -925,7 +925,7 @@ fn delete_from_leaf(
   key: k,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(DeleteResult(k), BtreeError) {
+) -> Result(DeleteResult(k), Error) {
   let children_list = non_empty_list.to_list(children)
   let #(rev_children, found) =
     list.fold(children_list, #([], False), fn(acc, entry) {
@@ -958,7 +958,7 @@ fn delete_from_branch(
   key: k,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(DeleteResult(k), BtreeError) {
+) -> Result(DeleteResult(k), Error) {
   let #(child_index, child_loc) =
     find_branch_child_index(children, key, compare)
   use child_result <- result.try(do_delete(
@@ -1008,7 +1008,7 @@ fn resolve_child_key(
   children: non_empty_list.NonEmptyList(#(k, Int)),
   child_index: Int,
   new_min: option.Option(k),
-) -> Result(k, BtreeError) {
+) -> Result(k, Error) {
   new_min
   |> option.to_result(Nil)
   |> result.lazy_or(fn() {
@@ -1035,14 +1035,13 @@ fn remove_child(
 ///
 /// **Experimental:** Not yet wired into any production code path.
 /// Reserved for a planned diff-based compaction strategy.
-@internal
 pub fn mark_deleted(
   tree tree: Btree(k, v),
   store store: store.Store,
   key key: k,
   key_codec key_codec: codec.Codec(k),
   compare compare: fn(k, k) -> order.Order,
-) -> Result(Btree(k, v), BtreeError) {
+) -> Result(Btree(k, v), Error) {
   case tree {
     Empty(..) -> Ok(tree)
     NonEmpty(
@@ -1078,7 +1077,7 @@ fn do_mark_deleted(
   key: k,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(MarkDeletedResult(k), BtreeError) {
+) -> Result(MarkDeletedResult(k), Error) {
   use data <- result.try(read_node(store, location))
   case node.decode_tree_node(data: data, key_codec: key_codec) {
     Error(Nil) ->
@@ -1096,7 +1095,7 @@ fn mark_deleted_in_leaf(
   key: k,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(MarkDeletedResult(k), BtreeError) {
+) -> Result(MarkDeletedResult(k), Error) {
   case
     non_empty_list.any(in: children, satisfying: fn(entry) {
       compare(entry.0, key) == order.Eq
@@ -1145,7 +1144,7 @@ fn mark_deleted_in_branch(
   key: k,
   key_codec: codec.Codec(k),
   compare: fn(k, k) -> order.Order,
-) -> Result(MarkDeletedResult(k), BtreeError) {
+) -> Result(MarkDeletedResult(k), Error) {
   let #(child_index, child_loc) =
     find_branch_child_index(children, key, compare)
   use child_result <- result.try(do_mark_deleted(
@@ -1188,7 +1187,7 @@ pub fn add_dirt(tree tree: Btree(k, v), amount amount: Int) -> Btree(k, v) {
 fn validate_sorted_unique(
   entries: List(#(k, v)),
   compare: fn(k, k) -> order.Order,
-) -> Result(Nil, BtreeError) {
+) -> Result(Nil, Error) {
   case entries {
     [] | [_] -> Ok(Nil)
     [#(k1, _), #(k2, _) as next, ..rest] ->
