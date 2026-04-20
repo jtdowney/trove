@@ -974,8 +974,8 @@ fn delete_from_leaf(
     True ->
       case list.reverse(rev_children) {
         [] -> Ok(DeleteEmpty)
-        [#(min_key, _), ..] as new_children -> {
-          let assert Ok(nel) = non_empty_list.from_list(new_children)
+        [#(min_key, _) as head, ..tail] -> {
+          let nel = non_empty_list.new(head, tail)
           use loc <- result.try(write_tree_node(
             store,
             node.Leaf(nel),
@@ -1009,8 +1009,8 @@ fn delete_from_branch(
       let new_children = remove_child(children, child_index)
       case new_children {
         [] -> Ok(DeleteEmpty)
-        [#(min_key, _), ..] -> {
-          let assert Ok(nel) = non_empty_list.from_list(new_children)
+        [#(min_key, _) as head, ..tail] -> {
+          let nel = non_empty_list.new(head, tail)
           use loc <- result.try(write_tree_node(
             store,
             node.Branch(nel),
