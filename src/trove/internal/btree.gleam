@@ -8,7 +8,7 @@ import gleam/order
 import gleam/pair
 import gleam/result
 import gleam/yielder
-import non_empty_list
+import non_empty_list.{type NonEmptyList}
 import trove/codec
 import trove/internal/btree/node
 import trove/internal/store
@@ -627,10 +627,15 @@ pub fn load(
   )
   case entries {
     [] -> Ok(Empty(dirt: 0, capacity: capacity))
-    [_, ..] -> {
+    [first, ..rest] -> {
       use Nil <- result.try(validate_sorted_unique(entries, compare))
       let entry_count = list.length(entries)
-      use value_pairs <- result.try(write_values(entries, store, value_codec))
+      let entries_nel = non_empty_list.new(first, rest)
+      use value_pairs <- result.try(write_values(
+        entries_nel,
+        store,
+        value_codec,
+      ))
       use leaf_pairs <- result.try(write_level(
         value_pairs,
         capacity,
@@ -670,11 +675,12 @@ pub fn load_from_yielder(
     return: Error(ValidationError("capacity must be at least 2")),
   )
   // State: (current_chunk_reversed, leaf_pairs_reversed, chunk_size, total_count, prev_key)
-  let initial = #([], [], 0, 0, option.None)
+  // current_chunk_reversed is Option(NonEmptyList) with entries newest-first
+  let initial = #(option.None, [], 0, 0, option.None)
 
   use #(remaining, leaf_pairs_rev, _, total_count, _) <- result.try(
     yielder.try_fold(entries, initial, fn(state, entry) {
-      let #(chunk_rev, leaves_rev, chunk_size, count, prev_key) = state
+      let #(chunk_opt, leaves_rev, chunk_size, count, prev_key) = state
       let #(key, value) = entry
       use Nil <- result.try(case prev_key {
         option.None -> Ok(Nil)
@@ -692,31 +698,47 @@ pub fn load_from_yielder(
         node.Value(value),
         value_codec,
       ))
-      let chunk_rev = [#(key, data_loc), ..chunk_rev]
+      let new_entry = #(key, data_loc)
+      let chunk_with_entry = case chunk_opt {
+        option.None -> non_empty_list.single(new_entry)
+        option.Some(nel) -> non_empty_list.prepend(to: nel, this: new_entry)
+      }
       let chunk_size = chunk_size + 1
       let count = count + 1
       case chunk_size >= capacity {
         True -> {
-          let leaf_children = list.reverse(chunk_rev)
+          let leaf_children = non_empty_list.reverse(chunk_with_entry)
           use leaf_pair <- result.try(flush_chunk(
             leaf_children,
             store,
             key_codec,
             node.Leaf,
           ))
-          Ok(#([], [leaf_pair, ..leaves_rev], 0, count, option.Some(key)))
+          Ok(#(
+            option.None,
+            [leaf_pair, ..leaves_rev],
+            0,
+            count,
+            option.Some(key),
+          ))
         }
         False ->
-          Ok(#(chunk_rev, leaves_rev, chunk_size, count, option.Some(key)))
+          Ok(#(
+            option.Some(chunk_with_entry),
+            leaves_rev,
+            chunk_size,
+            count,
+            option.Some(key),
+          ))
       }
     }),
   )
 
   // Write any remaining partial chunk as a final leaf
   use leaf_pairs <- result.try(case remaining {
-    [] -> Ok(list.reverse(leaf_pairs_rev))
-    _ -> {
-      let leaf_children = list.reverse(remaining)
+    option.None -> Ok(list.reverse(leaf_pairs_rev))
+    option.Some(chunk) -> {
+      let leaf_children = non_empty_list.reverse(chunk)
       use leaf_pair <- result.try(flush_chunk(
         leaf_children,
         store,
@@ -727,11 +749,12 @@ pub fn load_from_yielder(
     }
   })
 
-  case total_count {
-    0 -> Ok(Empty(dirt: 0, capacity: capacity))
-    _ -> {
+  case leaf_pairs {
+    [] -> Ok(Empty(dirt: 0, capacity: capacity))
+    [first_leaf, ..rest_leaves] -> {
+      let leaf_nel = non_empty_list.new(first_leaf, rest_leaves)
       use root_loc <- result.try(build_branches(
-        leaf_pairs,
+        leaf_nel,
         capacity,
         store,
         key_codec,
@@ -747,58 +770,72 @@ pub fn load_from_yielder(
 }
 
 fn write_values(
-  entries: List(#(k, v)),
+  entries: NonEmptyList(#(k, v)),
   store: store.Store,
   value_codec: codec.Codec(v),
-) -> Result(List(#(k, Int)), Error) {
-  list.try_map(entries, fn(entry) {
+) -> Result(NonEmptyList(#(k, Int)), Error) {
+  non_empty_list.map(entries, fn(entry) {
     let #(key, value) = entry
-    use loc <- result.try(write_data_node(store, node.Value(value), value_codec))
-    Ok(#(key, loc))
+    write_data_node(store, node.Value(value), value_codec)
+    |> result.map(fn(loc) { #(key, loc) })
   })
+  |> non_empty_list.all
 }
 
 fn write_level(
-  pairs: List(#(k, Int)),
+  pairs: NonEmptyList(#(k, Int)),
   capacity: Int,
   store: store.Store,
   key_codec: codec.Codec(k),
-  make_node: fn(non_empty_list.NonEmptyList(#(k, Int))) -> node.TreeNode(k),
-) -> Result(List(#(k, Int)), Error) {
-  let chunks = list.sized_chunk(pairs, capacity)
-  write_chunks(chunks, store, key_codec, make_node)
+  make_node: fn(NonEmptyList(#(k, Int))) -> node.TreeNode(k),
+) -> Result(NonEmptyList(#(k, Int)), Error) {
+  chunk_non_empty(pairs, capacity)
+  |> non_empty_list.map(flush_chunk(_, store, key_codec, make_node))
+  |> non_empty_list.all
 }
 
-fn write_chunks(
-  chunks: List(List(#(k, Int))),
-  store: store.Store,
-  key_codec: codec.Codec(k),
-  make_node: fn(non_empty_list.NonEmptyList(#(k, Int))) -> node.TreeNode(k),
-) -> Result(List(#(k, Int)), Error) {
-  list.try_map(chunks, flush_chunk(_, store, key_codec, make_node))
+fn chunk_non_empty(
+  items: NonEmptyList(a),
+  capacity: Int,
+) -> NonEmptyList(NonEmptyList(a)) {
+  let first = non_empty_list.first(items)
+  let rest = non_empty_list.rest(items)
+  let head_rest = list.take(rest, capacity - 1)
+  let tail = list.drop(rest, capacity - 1)
+  let head_chunk = non_empty_list.new(first, head_rest)
+  case tail {
+    [] -> non_empty_list.single(head_chunk)
+    [h, ..t] ->
+      non_empty_list.prepend(
+        to: chunk_non_empty(non_empty_list.new(h, t), capacity),
+        this: head_chunk,
+      )
+  }
 }
 
 fn flush_chunk(
-  children: List(#(k, Int)),
+  children: NonEmptyList(#(k, Int)),
   store: store.Store,
   key_codec: codec.Codec(k),
-  make_node: fn(non_empty_list.NonEmptyList(#(k, Int))) -> node.TreeNode(k),
+  make_node: fn(NonEmptyList(#(k, Int))) -> node.TreeNode(k),
 ) -> Result(#(k, Int), Error) {
-  let assert Ok(nel) = non_empty_list.from_list(children)
-  let #(first_key, _) = non_empty_list.first(nel)
-  use loc <- result.try(write_tree_node(store, make_node(nel), key_codec))
+  let #(first_key, _) = non_empty_list.first(children)
+  use loc <- result.try(write_tree_node(store, make_node(children), key_codec))
   Ok(#(first_key, loc))
 }
 
 fn build_branches(
-  pairs: List(#(k, Int)),
+  pairs: NonEmptyList(#(k, Int)),
   capacity: Int,
   store: store.Store,
   key_codec: codec.Codec(k),
 ) -> Result(Int, Error) {
-  case pairs {
-    [#(_, loc)] -> Ok(loc)
-    [_, _, ..] -> {
+  case non_empty_list.rest(pairs) {
+    [] -> {
+      let #(_, loc) = non_empty_list.first(pairs)
+      Ok(loc)
+    }
+    _ -> {
       use branch_pairs <- result.try(write_level(
         pairs,
         capacity,
@@ -808,7 +845,6 @@ fn build_branches(
       ))
       build_branches(branch_pairs, capacity, store, key_codec)
     }
-    [] -> panic as "build_branches requires non-empty pairs"
   }
 }
 
