@@ -5,7 +5,6 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/order
-import gleam/pair
 import gleam/result
 import gleam/yielder
 import non_empty_list.{type NonEmptyList}
@@ -53,7 +52,7 @@ type DeleteResult(k) {
 }
 
 type MarkDeletedResult(k) {
-  Marked(location: Int, min_key: option.Option(k))
+  Marked(location: Int, min_key: k)
   MarkNotFound
 }
 
@@ -1035,20 +1034,6 @@ fn delete_from_branch(
   }
 }
 
-fn resolve_child_key(
-  children: non_empty_list.NonEmptyList(#(k, Int)),
-  child_index: Int,
-  new_min: option.Option(k),
-) -> Result(k, Error) {
-  new_min
-  |> option.to_result(Nil)
-  |> result.lazy_or(fn() {
-    list.first(list.drop(non_empty_list.to_list(children), child_index))
-    |> result.map(pair.first)
-  })
-  |> result.replace_error(ValidationError("invalid child index"))
-}
-
 fn remove_child(
   children: non_empty_list.NonEmptyList(#(k, Int)),
   index: Int,
@@ -1143,7 +1128,7 @@ fn mark_deleted_in_leaf(
         node.Leaf(new_children),
         key_codec,
       ))
-      Ok(Marked(loc, option.Some(min_key)))
+      Ok(Marked(loc, min_key))
     }
   }
 }
@@ -1188,20 +1173,15 @@ fn mark_deleted_in_branch(
   case child_result {
     MarkNotFound -> Ok(MarkNotFound)
     Marked(new_child_loc, new_min) -> {
-      use existing_key <- result.try(resolve_child_key(
-        children,
-        child_index,
-        new_min,
-      ))
       let new_children =
-        replace_child(children, child_index, existing_key, new_child_loc)
+        replace_child(children, child_index, new_min, new_child_loc)
       let #(branch_min, _) = non_empty_list.first(new_children)
       use loc <- result.try(write_tree_node(
         store,
         node.Branch(new_children),
         key_codec,
       ))
-      Ok(Marked(loc, option.Some(branch_min)))
+      Ok(Marked(loc, branch_min))
     }
   }
 }
