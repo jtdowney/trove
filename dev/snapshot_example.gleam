@@ -13,7 +13,7 @@ pub fn main() -> Nil {
       key_codec: codec.int(),
       value_codec: codec.string(),
       key_compare: int.compare,
-      auto_compact: trove.NoAutoCompact,
+      auto_compact: trove.AutoCompact(min_dirt: 1000, min_dirt_factor: 0.25),
       auto_file_sync: trove.AutoSync,
       call_timeout: 5000,
     )

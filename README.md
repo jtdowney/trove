@@ -31,7 +31,7 @@ pub fn main() {
     key_codec: codec.string(),
     value_codec: codec.string(),
     key_compare: string.compare,
-    auto_compact: trove.NoAutoCompact,
+    auto_compact: trove.AutoCompact(min_dirt: 1000, min_dirt_factor: 0.25),
     auto_file_sync: trove.AutoSync,
     call_timeout: 5000,
   )
@@ -213,8 +213,8 @@ let df = trove.dirt_factor(db)
 // With ManualSync, call file_sync to flush writes to disk:
 trove.file_sync(db)
 
-// Enable auto-compaction: triggers when at least 100 dead entries
-// and dirt factor exceeds 25%
+// Tune auto-compaction (the default is min_dirt: 1000, min_dirt_factor: 0.25;
+// here we trigger sooner: 100 dead entries with at least 25% dirt)
 trove.set_auto_compact(
   db,
   setting: trove.AutoCompact(min_dirt: 100, min_dirt_factor: 0.25),
@@ -229,7 +229,7 @@ let config = trove.Config(
   key_codec: codec.string(),
   value_codec: codec.string(),
   key_compare: string.compare,
-  auto_compact: trove.AutoCompact(min_dirt: 100, min_dirt_factor: 0.25),
+  auto_compact: trove.AutoCompact(min_dirt: 1000, min_dirt_factor: 0.25),
   auto_file_sync: trove.AutoSync,
   call_timeout: 5000,
 )

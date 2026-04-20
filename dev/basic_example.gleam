@@ -11,7 +11,7 @@ pub fn main() -> Nil {
       key_codec: codec.string(),
       value_codec: codec.string(),
       key_compare: string.compare,
-      auto_compact: trove.NoAutoCompact,
+      auto_compact: trove.AutoCompact(min_dirt: 1000, min_dirt_factor: 0.25),
       auto_file_sync: trove.AutoSync,
       call_timeout: 5000,
     )

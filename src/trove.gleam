@@ -17,7 +17,7 @@
 ////   key_codec: codec.string(),
 ////   value_codec: codec.string(),
 ////   key_compare: string.compare,
-////   auto_compact: trove.NoAutoCompact,
+////   auto_compact: trove.AutoCompact(min_dirt: 1000, min_dirt_factor: 0.25),
 ////   auto_file_sync: trove.AutoSync,
 ////   call_timeout: 5000,
 //// )
@@ -77,6 +77,9 @@ pub type OpenError {
 /// Controls automatic compaction behavior. When auto-compaction is enabled,
 /// compaction triggers after a write if both `min_dirt` and `min_dirt_factor`
 /// thresholds are exceeded simultaneously.
+///
+/// The recommended default is `AutoCompact(min_dirt: 1000, min_dirt_factor:
+/// 0.25)`, which keeps disk usage bounded without compacting too aggressively.
 ///
 /// **Note:** Auto-compaction runs synchronously inside the database actor.
 /// While compaction is in progress, all other operations (reads, writes,
@@ -390,7 +393,7 @@ pub fn put_and_delete_multi_in(
 ///   key_codec: codec.string(),
 ///   value_codec: codec.string(),
 ///   key_compare: string.compare,
-///   auto_compact: trove.NoAutoCompact,
+///   auto_compact: trove.AutoCompact(min_dirt: 1000, min_dirt_factor: 0.25),
 ///   auto_file_sync: trove.AutoSync,
 ///   call_timeout: 5000,
 /// )
@@ -491,7 +494,7 @@ pub fn file_sync(db: Db(k, v)) -> Nil {
 /// Change the auto-compaction setting at runtime.
 ///
 /// ```gleam
-/// trove.set_auto_compact(db, trove.AutoCompact(min_dirt: 100, min_dirt_factor: 0.25))
+/// trove.set_auto_compact(db, trove.AutoCompact(min_dirt: 1000, min_dirt_factor: 0.25))
 /// ```
 pub fn set_auto_compact(db: Db(k, v), setting setting: AutoCompact) -> Nil {
   db.set_auto_compact(
