@@ -484,20 +484,25 @@ fn insert_into_branch(
 }
 
 fn insert_into_sorted(
-  children: non_empty_list.NonEmptyList(#(k, Int)),
+  children: NonEmptyList(#(k, Int)),
   key: k,
   location: Int,
   compare: fn(k, k) -> order.Order,
-) -> #(non_empty_list.NonEmptyList(#(k, Int)), Bool) {
-  let #(result_list, is_new) =
-    do_insert_into_sorted(
-      non_empty_list.to_list(children),
-      key,
-      location,
-      compare,
+) -> #(NonEmptyList(#(k, Int)), Bool) {
+  let #(child_key, child_loc) = non_empty_list.first(children)
+  let rest = non_empty_list.rest(children)
+  case compare(key, child_key) {
+    order.Lt -> #(
+      non_empty_list.new(#(key, location), [#(child_key, child_loc), ..rest]),
+      True,
     )
-  let assert Ok(nel) = non_empty_list.from_list(result_list)
-  #(nel, is_new)
+    order.Eq -> #(non_empty_list.new(#(key, location), rest), False)
+    order.Gt -> {
+      let #(new_rest, is_new) =
+        do_insert_into_sorted(rest, key, location, compare)
+      #(non_empty_list.new(#(child_key, child_loc), new_rest), is_new)
+    }
+  }
 }
 
 fn do_insert_into_sorted(
@@ -522,22 +527,27 @@ fn do_insert_into_sorted(
 }
 
 fn split_children(
-  children: non_empty_list.NonEmptyList(#(k, Int)),
-) -> #(
-  non_empty_list.NonEmptyList(#(k, Int)),
-  k,
-  k,
-  non_empty_list.NonEmptyList(#(k, Int)),
-) {
+  children: NonEmptyList(#(k, Int)),
+) -> #(NonEmptyList(#(k, Int)), k, k, NonEmptyList(#(k, Int))) {
+  // Caller invariant: length > capacity >= 2, so length >= 3 and both halves
+  // end up with at least one element.
   let count = non_empty_list.length(of: children)
   let mid = count / 2
-  let left = non_empty_list.take(from: children, up_to: mid)
-  let right = non_empty_list.drop(from: children, up_to: mid)
-  let assert Ok(left_nel) = non_empty_list.from_list(left)
-  let assert Ok(right_nel) = non_empty_list.from_list(right)
-  let #(left_min, _) = non_empty_list.first(left_nel)
-  let #(right_min, _) = non_empty_list.first(right_nel)
-  #(left_nel, left_min, right_min, right_nel)
+  let #(left, right) = list.split(non_empty_list.to_list(children), mid)
+  case left, right {
+    [lh, ..lt], [rh, ..rt] -> {
+      let #(left_min, _) = lh
+      let #(right_min, _) = rh
+      #(
+        non_empty_list.new(lh, lt),
+        left_min,
+        right_min,
+        non_empty_list.new(rh, rt),
+      )
+    }
+    _, _ ->
+      panic as "split_children: caller invariant (length > capacity >= 2) violated"
+  }
 }
 
 fn find_branch_child_index(
@@ -577,38 +587,48 @@ fn do_find_branch_child_index(
 }
 
 fn replace_child(
-  children: non_empty_list.NonEmptyList(#(k, Int)),
+  children: NonEmptyList(#(k, Int)),
   index: Int,
   new_key: k,
   new_loc: Int,
-) -> non_empty_list.NonEmptyList(#(k, Int)) {
+) -> NonEmptyList(#(k, Int)) {
   let children_list = non_empty_list.to_list(children)
   let before = list.take(children_list, index)
   let after = list.drop(children_list, index + 1)
-  let result = list.append(before, [#(new_key, new_loc), ..after])
-  let assert Ok(nel) = non_empty_list.from_list(result)
-  nel
+  nel_splice_one(before, #(new_key, new_loc), after)
 }
 
 fn splice_split(
-  children: non_empty_list.NonEmptyList(#(k, Int)),
+  children: NonEmptyList(#(k, Int)),
   index: Int,
   left_key: k,
   left_loc: Int,
   right_key: k,
   right_loc: Int,
-) -> non_empty_list.NonEmptyList(#(k, Int)) {
+) -> NonEmptyList(#(k, Int)) {
   let children_list = non_empty_list.to_list(children)
   let before = list.take(children_list, index)
   let after = list.drop(children_list, index + 1)
-  let result =
-    list.append(before, [
-      #(left_key, left_loc),
-      #(right_key, right_loc),
-      ..after
-    ])
-  let assert Ok(nel) = non_empty_list.from_list(result)
-  nel
+  nel_splice_two(before, #(left_key, left_loc), #(right_key, right_loc), after)
+}
+
+fn nel_splice_one(before: List(a), middle: a, after: List(a)) -> NonEmptyList(a) {
+  case before {
+    [] -> non_empty_list.new(middle, after)
+    [h, ..t] -> non_empty_list.new(h, list.append(t, [middle, ..after]))
+  }
+}
+
+fn nel_splice_two(
+  before: List(a),
+  first: a,
+  second: a,
+  after: List(a),
+) -> NonEmptyList(a) {
+  case before {
+    [] -> non_empty_list.new(first, [second, ..after])
+    [h, ..t] -> non_empty_list.new(h, list.append(t, [first, second, ..after]))
+  }
 }
 
 /// Bulk-load a sorted list of unique entries into a new tree.
@@ -1134,24 +1154,17 @@ fn mark_deleted_in_leaf(
 }
 
 fn replace_child_value(
-  children: non_empty_list.NonEmptyList(#(k, Int)),
+  children: NonEmptyList(#(k, Int)),
   key: k,
   new_loc: Int,
   compare: fn(k, k) -> order.Order,
-) -> #(Bool, non_empty_list.NonEmptyList(#(k, Int))) {
-  let fold_result =
-    non_empty_list.fold(
-      over: children,
-      from: #(False, []),
-      with: fn(acc, entry) {
-        case compare(entry.0, key) == order.Eq {
-          True -> #(True, [#(entry.0, new_loc), ..acc.1])
-          False -> #(acc.0, [entry, ..acc.1])
-        }
-      },
-    )
-  let assert Ok(nel) = non_empty_list.from_list(list.reverse(fold_result.1))
-  #(fold_result.0, nel)
+) -> #(Bool, NonEmptyList(#(k, Int))) {
+  non_empty_list.map_fold(over: children, from: False, with: fn(found, entry) {
+    case compare(entry.0, key) == order.Eq {
+      True -> #(True, #(entry.0, new_loc))
+      False -> #(found, entry)
+    }
+  })
 }
 
 fn mark_deleted_in_branch(
