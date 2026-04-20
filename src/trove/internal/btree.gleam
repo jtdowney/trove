@@ -47,7 +47,7 @@ type InsertOutcome(k) {
 }
 
 type DeleteResult(k) {
-  DeletedNode(location: Int, min_key: option.Option(k))
+  DeletedNode(location: Int, min_key: k)
   DeleteNotFound
   DeleteEmpty
 }
@@ -982,7 +982,7 @@ fn delete_from_leaf(
             node.Leaf(nel),
             key_codec,
           ))
-          Ok(DeletedNode(loc, option.Some(min_key)))
+          Ok(DeletedNode(loc, min_key))
         }
       }
   }
@@ -1017,25 +1017,20 @@ fn delete_from_branch(
             node.Branch(nel),
             key_codec,
           ))
-          Ok(DeletedNode(loc, option.Some(min_key)))
+          Ok(DeletedNode(loc, min_key))
         }
       }
     }
     DeletedNode(new_child_loc, new_min) -> {
-      use existing_key <- result.try(resolve_child_key(
-        children,
-        child_index,
-        new_min,
-      ))
       let new_children =
-        replace_child(children, child_index, existing_key, new_child_loc)
+        replace_child(children, child_index, new_min, new_child_loc)
       let #(branch_min, _) = non_empty_list.first(new_children)
       use loc <- result.try(write_tree_node(
         store,
         node.Branch(new_children),
         key_codec,
       ))
-      Ok(DeletedNode(loc, option.Some(branch_min)))
+      Ok(DeletedNode(loc, branch_min))
     }
   }
 }
