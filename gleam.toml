@@ -1,5 +1,5 @@
 name = "trove"
-version = "1.0.0"
+version = "1.1.0"
 description = "An embedded, crash-safe key-value store for Gleam, inspired by CubDB"
 licences = ["Apache-2.0"]
 repository = { type = "github", user = "jtdowney", repo = "trove" }
