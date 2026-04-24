@@ -322,7 +322,9 @@ pub fn corrupt_only_file_returns_no_header_test() {
   Nil
 }
 
-fn write_header_then_mutate_bytes(mutate: fn(BitArray, Int) -> BitArray) -> Nil {
+fn write_header_then_mutate_bytes(
+  mutate: fn(BitArray, Int) -> BitArray,
+) -> Nil {
   let dir = test_helpers.temp_dir()
   let path = dir <> "/corrupt.db"
   let assert Ok(s) = store.open(path: path)

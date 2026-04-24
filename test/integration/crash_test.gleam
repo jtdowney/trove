@@ -55,7 +55,12 @@ fn every_nth(from: Int, to: Int, step: Int) -> List(Int) {
   do_every_nth(from, to, step, [])
 }
 
-fn do_every_nth(current: Int, max: Int, step: Int, acc: List(Int)) -> List(Int) {
+fn do_every_nth(
+  current: Int,
+  max: Int,
+  step: Int,
+  acc: List(Int),
+) -> List(Int) {
   case current >= max {
     True -> list.reverse(acc)
     False -> do_every_nth(current + step, max, step, [current, ..acc])

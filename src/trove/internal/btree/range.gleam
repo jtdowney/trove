@@ -48,7 +48,11 @@ pub fn query(
   }
 }
 
-fn fetch_or_panic(store: store.Store, location: Int, label: String) -> BitArray {
+fn fetch_or_panic(
+  store: store.Store,
+  location: Int,
+  label: String,
+) -> BitArray {
   case store.get_node(store: store, location: location) {
     Ok(d) -> d
     Error(reason) ->

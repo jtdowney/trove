@@ -612,7 +612,11 @@ fn splice_split(
   nel_splice_two(before, #(left_key, left_loc), #(right_key, right_loc), after)
 }
 
-fn nel_splice_one(before: List(a), middle: a, after: List(a)) -> NonEmptyList(a) {
+fn nel_splice_one(
+  before: List(a),
+  middle: a,
+  after: List(a),
+) -> NonEmptyList(a) {
   case before {
     [] -> non_empty_list.new(middle, after)
     [h, ..t] -> non_empty_list.new(h, list.append(t, [middle, ..after]))
