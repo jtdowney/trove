@@ -5,6 +5,9 @@
 
 An embedded, crash-safe key-value store for Gleam, inspired by [CubDB](https://github.com/lucaong/cubdb). Built on an append-only copy-on-write B+ tree with type-safe codecs and explicit key ordering.
 
+> [!WARNING]
+> This library is an experiment I made to learn more about B+ trees and crash-safe storage after seeing CubDB. While it works and I use it in some demonstration projects, it is not something I would trust in a critical production environment.
+
 ## Features
 
 - Crash-safe - append-only file format with block-based headers; no corruption on unexpected shutdown
